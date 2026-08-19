@@ -254,7 +254,8 @@ function claimRelease(
        SET release_state = 'requested', release_request_id = ?,
            release_requested_at = COALESCE(release_requested_at, datetime('now')),
            release_error = NULL, updated_at = datetime('now')
-       WHERE dispatch_id = ? AND release_state IN ('not_requested', 'retained', 'requested', 'unknown')`
+        WHERE dispatch_id = ?
+          AND release_state IN ('not_requested', 'retained', 'requested', 'releasing', 'unknown')`
     ).run(requestId, dispatchId)
     db.exec('COMMIT')
     return 'claimed'

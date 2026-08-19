@@ -274,6 +274,25 @@ describe('federated worker terminal release', () => {
       result: { state: 'retained', reason: 'user_takeover', processAction: 'none' }
     })
     expect(workerRuntime.closeTerminal).not.toHaveBeenCalled()
+
+    const replacementId = 'ctx_after_user_takeover'
+    createReplacementAttachment(replacementId)
+    expect(() =>
+      workerDb.prepareRemoteAttachmentAuthority({
+        dispatchId: replacementId,
+        paneKey: PANE_KEY,
+        processIncarnation: INCARNATION,
+        worktreeId: 'repo::windows-worktree',
+        terminalHandle: HANDLE,
+        setupState: 'not_applicable',
+        effects: [{ kind: 'terminal', role: 'agent', action: 'reused', id: HANDLE }]
+      })
+    ).not.toThrow()
+    expect(workerDb.getRemoteDispatchAttachment(dispatchId)).toMatchObject({
+      release_state: 'released',
+      capability_hash: null,
+      release_error: 'user_takeover'
+    })
   })
 
   it('replays a lost release response without closing twice', async () => {
@@ -302,6 +321,31 @@ describe('federated worker terminal release', () => {
       ok: true,
       result: { source: 'terminal', archived: true, terminal: { tail: ['remote output'] } }
     })
+  })
+
+  it('reclaims a release stranded after archive commit with the same request identity', async () => {
+    const dispatchId = await startAndSettle()
+    workerDb.db
+      .prepare(
+        `UPDATE remote_dispatch_attachments
+         SET release_state = 'releasing', release_request_id = 'stranded_release',
+             archive_kind = 'terminal_tail', archive_content = '["remote output"]',
+             archive_source = 'terminal', archive_status = 'captured'
+         WHERE dispatch_id = ?`
+      )
+      .run(dispatchId)
+    const releaseMethod = ORCHESTRATION_FEDERATION_RELEASE_METHODS[0]
+
+    await expect(
+      releaseMethod.handler({ dispatchId }, {
+        runtime: workerRuntime,
+        authenticatedCallerFingerprint:
+          workerDb.getRemoteDispatchAttachment(dispatchId)!.home_peer_fingerprint,
+        orchestrationMutation: { requestId: 'stranded_release' }
+      } as never)
+    ).resolves.toMatchObject({ state: 'released', processAction: 'closed_agent_terminal' })
+    expect(workerRuntime.closeTerminal).toHaveBeenCalledOnce()
+    expect(workerDb.getRemoteDispatchAttachment(dispatchId)?.release_state).toBe('released')
   })
 
   it('keeps a pre-mutation connectivity failure retryable', async () => {
@@ -345,6 +389,66 @@ describe('federated worker terminal release', () => {
   it('rejects exact reuse while a settled remote attachment still owns the terminal', async () => {
     const dispatchId = await startAndSettle()
     const replacementId = 'ctx_replacement'
+    createReplacementAttachment(replacementId)
+
+    expect(() =>
+      workerDb.prepareRemoteAttachmentAuthority({
+        dispatchId: replacementId,
+        paneKey: PANE_KEY,
+        processIncarnation: INCARNATION,
+        worktreeId: 'repo::windows-worktree',
+        terminalHandle: HANDLE,
+        setupState: 'not_applicable',
+        effects: [{ kind: 'terminal', role: 'agent', action: 'reused', id: HANDLE }]
+      })
+    ).toThrow(/owned by another remote Dispatch/)
+    expect(workerDb.getRemoteDispatchAttachment(dispatchId)?.release_state).toBe('not_requested')
+  })
+
+  it('transfers exact explicit reuse from a settled external attachment', async () => {
+    const dispatchId = await startAndSettle()
+    workerDb.db
+      .prepare(
+        `UPDATE remote_dispatch_attachments SET effects = ?, residual_resources = '[]'
+         WHERE dispatch_id = ?`
+      )
+      .run(
+        JSON.stringify([{ kind: 'terminal', role: 'agent', action: 'reused', id: HANDLE }]),
+        dispatchId
+      )
+    const replacementId = 'ctx_external_replacement'
+    createReplacementAttachment(replacementId)
+
+    expect(() =>
+      workerDb.prepareRemoteAttachmentAuthority({
+        dispatchId: replacementId,
+        paneKey: PANE_KEY,
+        processIncarnation: INCARNATION,
+        worktreeId: 'repo::windows-worktree',
+        terminalHandle: HANDLE,
+        setupState: 'not_applicable',
+        effects: [{ kind: 'terminal', role: 'agent', action: 'reused', id: HANDLE }]
+      })
+    ).not.toThrow()
+    expect(workerDb.getRemoteDispatchAttachment(dispatchId)).toMatchObject({
+      release_state: 'released',
+      capability_hash: null
+    })
+    expect(
+      workerDb.isRemoteAttachmentProcessCurrent({
+        dispatchId: replacementId,
+        paneKey: PANE_KEY,
+        processIncarnation: INCARNATION
+      })
+    ).toBe(true)
+  })
+
+  it('rejects exact reuse while the prior remote attachment is active', async () => {
+    const dispatchId = await startAndSettle()
+    workerDb.db
+      .prepare("UPDATE remote_dispatch_attachments SET state = 'ready' WHERE dispatch_id = ?")
+      .run(dispatchId)
+    const replacementId = 'ctx_active_replacement'
     createReplacementAttachment(replacementId)
 
     expect(() =>

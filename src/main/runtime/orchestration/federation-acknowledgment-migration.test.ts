@@ -28,7 +28,7 @@ describe('federation acknowledgment migration', () => {
     const oldDb = new Database(dbPath)
     oldDb.exec('ALTER TABLE federated_dispatches DROP COLUMN to_home_acknowledged_sequence')
     oldDb.pragma('user_version = 26')
-    expect(resolveOrchestrationMigrationStartVersion(oldDb, 26, 29)).toBe(26)
+    expect(resolveOrchestrationMigrationStartVersion(oldDb, 26, SCHEMA_VERSION)).toBe(26)
     oldDb
       .prepare(
         `INSERT INTO federated_dispatches (
@@ -61,7 +61,7 @@ describe('federation acknowledgment migration', () => {
     oldDb.exec('ALTER TABLE remote_dispatch_attachments DROP COLUMN archive_content')
     oldDb.exec('ALTER TABLE remote_dispatch_attachments DROP COLUMN release_state')
     oldDb.pragma('user_version = 28')
-    expect(resolveOrchestrationMigrationStartVersion(oldDb, 28, 29)).toBe(28)
+    expect(resolveOrchestrationMigrationStartVersion(oldDb, 28, SCHEMA_VERSION)).toBe(28)
     oldDb.close()
 
     db = new OrchestrationDb(dbPath)
@@ -69,7 +69,7 @@ describe('federation acknowledgment migration', () => {
     const columns = sqlite.pragma('table_info(remote_dispatch_attachments)') as { name: string }[]
     const indexes = sqlite.pragma('index_list(remote_dispatch_attachments)') as { name: string }[]
 
-    expect(sqlite.pragma('user_version', { simple: true })).toBe(29)
+    expect(sqlite.pragma('user_version', { simple: true })).toBe(SCHEMA_VERSION)
     expect(columns.map((column) => column.name)).toEqual(
       expect.arrayContaining([
         'release_state',
@@ -83,7 +83,7 @@ describe('federation acknowledgment migration', () => {
     )
   })
 
-  it('repairs a v29 database missing the remote release identity index', () => {
+  it('repairs a v30 database missing the remote release identity index', () => {
     tempDir = mkdtempSync(join(tmpdir(), 'orca-federation-release-index-repair-'))
     const dbPath = join(tempDir, 'orchestration.db')
     db = new OrchestrationDb(dbPath)
@@ -92,14 +92,14 @@ describe('federation acknowledgment migration', () => {
 
     const oldDb = new Database(dbPath)
     oldDb.exec('DROP INDEX idx_remote_dispatch_attachments_unreleased_process')
-    expect(resolveOrchestrationMigrationStartVersion(oldDb, 29, 29)).toBe(6)
+    expect(resolveOrchestrationMigrationStartVersion(oldDb, SCHEMA_VERSION, SCHEMA_VERSION)).toBe(6)
     oldDb.close()
 
     db = new OrchestrationDb(dbPath)
     const sqlite = (db as unknown as { db: Database.Database }).db
     const indexes = sqlite.pragma('index_list(remote_dispatch_attachments)') as { name: string }[]
 
-    expect(sqlite.pragma('user_version', { simple: true })).toBe(29)
+    expect(sqlite.pragma('user_version', { simple: true })).toBe(SCHEMA_VERSION)
     expect(indexes.map((index) => index.name)).toContain(
       'idx_remote_dispatch_attachments_unreleased_process'
     )

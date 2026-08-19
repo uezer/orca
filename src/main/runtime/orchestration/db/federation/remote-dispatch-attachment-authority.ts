@@ -4,6 +4,7 @@ import { OrchestrationError } from '../../orchestration-error'
 import { hashDispatchCapability } from '../dispatch-capability-hash'
 import { isEquivalentPaneKey } from '../pane-key-match'
 import type { OrchestrationDb } from '../orchestration-db'
+import { claimRemoteAttachmentLeaseForStart } from './remote-dispatch-attachment-lease'
 
 export function prepareRemoteAttachmentAuthority(
   this: OrchestrationDb,
@@ -26,7 +27,7 @@ export function prepareRemoteAttachmentAuthority(
         `Remote Dispatch ${params.dispatchId} is not starting.`
       )
     }
-    assertRemoteAttachmentLeaseAvailable.call(this, params)
+    claimRemoteAttachmentLeaseForStart.call(this, params)
     const capability = `dcap_${randomBytes(32).toString('base64url')}`
     const result = this.db
       .prepare(
@@ -67,45 +68,6 @@ export function prepareRemoteAttachmentAuthority(
   } catch (error) {
     this.db.exec('ROLLBACK')
     throw error
-  }
-}
-
-function assertRemoteAttachmentLeaseAvailable(
-  this: OrchestrationDb,
-  params: {
-    dispatchId: string
-    paneKey: string
-    processIncarnation: string
-    terminalHandle: string
-  }
-): void {
-  const candidates = this.db
-    .prepare(
-      `SELECT dispatch_id, pane_key, release_state FROM remote_dispatch_attachments
-       WHERE dispatch_id != ? AND process_incarnation = ? AND release_state != 'released'`
-    )
-    .all(params.dispatchId, params.processIncarnation) as Pick<
-    RemoteDispatchAttachmentRow,
-    'dispatch_id' | 'pane_key' | 'release_state'
-  >[]
-  const exact = candidates.filter(
-    (candidate) => candidate.pane_key && isEquivalentPaneKey(candidate.pane_key, params.paneKey)
-  )
-  if (
-    exact.some((candidate) =>
-      ['requested', 'releasing', 'unknown'].includes(candidate.release_state ?? '')
-    )
-  ) {
-    throw new OrchestrationError(
-      'terminal_release_in_progress',
-      `Terminal ${params.terminalHandle} has a release in progress.`
-    )
-  }
-  if (exact.length > 0) {
-    throw new OrchestrationError(
-      'terminal_owned',
-      `Terminal ${params.terminalHandle} is owned by another remote Dispatch.`
-    )
   }
 }
 
