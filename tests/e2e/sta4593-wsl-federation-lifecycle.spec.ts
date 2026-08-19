@@ -132,6 +132,41 @@ async function waitForWorkerText(
   return latest
 }
 
+async function closeCreatedTerminals(
+  remote: RuntimeClient,
+  createdHandles: string[]
+): Promise<void> {
+  const listed = await remote.call<RuntimeTerminalListResult>('terminal.list', {})
+  for (const handle of createdHandles) {
+    if (!listed.result.terminals.some((terminal) => terminal.handle === handle)) {
+      continue
+    }
+    try {
+      await remote.call('terminal.close', { terminal: handle })
+    } catch (error) {
+      if (!hasRuntimeErrorCode(error, 'tab_not_found')) {
+        throw error
+      }
+    }
+  }
+  await expect
+    .poll(async () => {
+      const remaining = await remote.call<RuntimeTerminalListResult>('terminal.list', {})
+      return createdHandles.filter((handle) =>
+        remaining.result.terminals.some((terminal) => terminal.handle === handle)
+      )
+    })
+    .toEqual([])
+}
+
+function hasRuntimeErrorCode(error: unknown, code: string): boolean {
+  if (!error || typeof error !== 'object') {
+    return false
+  }
+  // Older paired runtimes can preserve the exact message while dropping the string code.
+  return ('code' in error && error.code === code) || ('message' in error && error.message === code)
+}
+
 test.afterAll(() => {
   rmSync(remoteClientProfile, { recursive: true, force: true })
 })
@@ -469,19 +504,6 @@ test('proves STA-4593 A/B/C across headed Windows and isolated WSL @headful', as
       ).toBe(false)
     }
   } finally {
-    const listed = await remote.call<RuntimeTerminalListResult>('terminal.list', {})
-    for (const handle of createdHandles) {
-      if (listed.result.terminals.some((terminal) => terminal.handle === handle)) {
-        await remote.call('terminal.close', { terminal: handle })
-      }
-    }
-    await expect
-      .poll(async () => {
-        const remaining = await remote.call<RuntimeTerminalListResult>('terminal.list', {})
-        return createdHandles.filter((handle) =>
-          remaining.result.terminals.some((terminal) => terminal.handle === handle)
-        )
-      })
-      .toEqual([])
+    await closeCreatedTerminals(remote, createdHandles)
   }
 })
