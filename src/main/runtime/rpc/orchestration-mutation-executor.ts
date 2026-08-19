@@ -66,14 +66,19 @@ export class OrchestrationMutationExecutor {
     const resumableRelease =
       request.method === 'orchestration.workerRelease' ||
       request.method === 'orchestration.federationRelease'
-    const resumedPendingMutation = begun.disposition === 'pending' && resumableRelease
+    const authoritativeCompletedRelease =
+      begun.disposition === 'completed' && request.method === 'orchestration.federationRelease'
+    const replayedMutation =
+      (begun.disposition === 'pending' && resumableRelease) || authoritativeCompletedRelease
 
     if (begun.disposition === 'completed') {
       const active = this.inFlight.get(key)
       if (active) {
         return attachMutationReceipt(await active, requestId, true)
       }
-      return attachMutationReceipt(JSON.parse(begun.row.receipt ?? 'null'), requestId, true)
+      if (!authoritativeCompletedRelease) {
+        return attachMutationReceipt(JSON.parse(begun.row.receipt ?? 'null'), requestId, true)
+      }
     }
     if (begun.disposition === 'pending') {
       const active = this.inFlight.get(key)
@@ -102,7 +107,7 @@ export class OrchestrationMutationExecutor {
       if (!isTransientFederatedReleaseResult(request.method, result)) {
         db.completeMutationReceipt({
           ...identity,
-          receipt: JSON.stringify(attachMutationReceipt(result, requestId, resumedPendingMutation))
+          receipt: JSON.stringify(mutationReceiptForStorage(request.method, result, requestId))
         })
       }
     }
@@ -110,11 +115,14 @@ export class OrchestrationMutationExecutor {
     this.inFlight.set(key, active)
     try {
       const result = await active
-      const receipted = attachMutationReceipt(result, requestId, resumedPendingMutation)
+      const receipted = attachMutationReceipt(result, requestId, replayedMutation)
       if (isTransientFederatedReleaseResult(request.method, result)) {
         db.discardPendingMutationReceipt(callerFingerprint, requestId)
       } else {
-        db.completeMutationReceipt({ ...identity, receipt: JSON.stringify(receipted) })
+        db.completeMutationReceipt({
+          ...identity,
+          receipt: JSON.stringify(mutationReceiptForStorage(request.method, result, requestId))
+        })
       }
       return receipted
     } catch (error) {
@@ -195,6 +203,20 @@ function attachMutationReceipt(result: unknown, requestId: string, replayed: boo
     return { result, mutation: { requestId, replayed } }
   }
   return { ...(result as Record<string, unknown>), mutation: { requestId, replayed } }
+}
+
+function mutationReceiptForStorage(method: string, result: unknown, requestId: string): unknown {
+  const receipt = attachMutationReceipt(result, requestId, false)
+  if (method !== 'orchestration.federationRelease' || !receipt || typeof receipt !== 'object') {
+    return receipt
+  }
+  const stored = { ...(receipt as Record<string, unknown>) }
+  const archive = stored.archive
+  if (archive && typeof archive === 'object' && !Array.isArray(archive)) {
+    const { content: _content, ...summary } = archive as Record<string, unknown>
+    stored.archive = summary
+  }
+  return stored
 }
 
 function getPendingWorkerStartRecovery(

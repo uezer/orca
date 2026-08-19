@@ -11,10 +11,12 @@ import { RpcDispatcher } from '../dispatcher'
 import { ORCHESTRATION_METHODS } from './orchestration'
 import { createFederationWorkerStartRequest as startRequest } from './orchestration-federation-test-request'
 import { ORCHESTRATION_FEDERATION_RELEASE_METHODS } from './orchestration-federation-release-control'
-
-const HANDLE = 'term_windows_worker'
-const PANE_KEY = 'tab_worker:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
-const INCARNATION = 'windows_runtime:pty:1'
+import {
+  configureFederatedReleaseTestRuntime,
+  FEDERATED_RELEASE_TEST_HANDLE as HANDLE,
+  FEDERATED_RELEASE_TEST_INCARNATION as INCARNATION,
+  FEDERATED_RELEASE_TEST_PANE_KEY as PANE_KEY
+} from './orchestration-federation-release-test-runtime'
 
 describe('federated worker terminal release', () => {
   let homeDb: OrchestrationDb
@@ -32,7 +34,7 @@ describe('federated worker terminal release', () => {
     workerDb = new OrchestrationDb(':memory:')
     workerRuntime = new OrcaRuntimeService()
     workerRuntime.setOrchestrationDb(workerDb)
-    configureWorkerRuntime(workerRuntime)
+    configureFederatedReleaseTestRuntime(workerRuntime)
     workerDispatcher = new RpcDispatcher({ runtime: workerRuntime, methods: ORCHESTRATION_METHODS })
     workerCapabilities = [...(workerRuntime.getStatus().capabilities ?? [])]
     loseNextReleaseResponse = false
@@ -184,6 +186,30 @@ describe('federated worker terminal release', () => {
       archive_source: 'terminal',
       archive_status: 'captured'
     })
+    const durableReleaseReceipt = workerDb.db
+      .prepare(
+        `SELECT request_id, receipt FROM mutation_receipts
+         WHERE method = 'orchestration.federationRelease' AND state = 'completed'`
+      )
+      .get() as { request_id: string; receipt: string }
+    expect(durableReleaseReceipt.receipt).not.toContain('remote output')
+    await expect(
+      workerDispatcher.dispatch({
+        id: 'release_from_compact_receipt',
+        authToken: 'run-home-device-token',
+        orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
+        orchestrationRequestId: durableReleaseReceipt.request_id,
+        method: 'orchestration.federationRelease',
+        params: { dispatchId }
+      })
+    ).resolves.toMatchObject({
+      ok: true,
+      result: {
+        state: 'already_released',
+        archive: { content: expect.stringContaining('remote output') },
+        mutation: { replayed: true }
+      }
+    })
     workerDb.db
       .prepare("DELETE FROM mutation_receipts WHERE method = 'orchestration.federationRelease'")
       .run()
@@ -307,9 +333,10 @@ describe('federated worker terminal release', () => {
 
     await expect(release(dispatchId, 'release_recovered')).resolves.toMatchObject({
       ok: true,
-      result: { state: 'released', processAction: 'closed_agent_terminal' }
+      result: { state: 'already_released', processAction: 'none' }
     })
     expect(workerRuntime.closeTerminal).toHaveBeenCalledOnce()
+    expect(homeDb.getWorkerTerminalResourceByOwner(dispatchId)?.release_state).toBe('released')
     await expect(
       homeDispatcher.dispatch({
         id: 'read_lost_response_archive',
@@ -346,6 +373,36 @@ describe('federated worker terminal release', () => {
     ).resolves.toMatchObject({ state: 'released', processAction: 'closed_agent_terminal' })
     expect(workerRuntime.closeTerminal).toHaveBeenCalledOnce()
     expect(workerDb.getRemoteDispatchAttachment(dispatchId)?.release_state).toBe('released')
+  })
+
+  it('settles a release crash after close from archived output and dead-process inventory', async () => {
+    const dispatchId = await startAndSettle()
+    workerDb.db
+      .prepare(
+        `UPDATE remote_dispatch_attachments
+         SET release_state = 'releasing', release_request_id = 'closed_before_crash',
+             release_error = 'close_committed', archive_kind = 'terminal_tail',
+             archive_content = '["remote output"]', archive_source = 'terminal',
+             archive_status = 'captured' WHERE dispatch_id = ?`
+      )
+      .run(dispatchId)
+    vi.mocked(workerRuntime.showTerminal).mockRejectedValueOnce(new Error('terminal missing'))
+    vi.spyOn(workerRuntime, 'inspectTerminalProcessIncarnationLiveness').mockResolvedValue('exited')
+    const releaseMethod = ORCHESTRATION_FEDERATION_RELEASE_METHODS[0]
+
+    await expect(
+      releaseMethod.handler({ dispatchId }, {
+        runtime: workerRuntime,
+        authenticatedCallerFingerprint:
+          workerDb.getRemoteDispatchAttachment(dispatchId)!.home_peer_fingerprint,
+        orchestrationMutation: { requestId: 'closed_before_crash' }
+      } as never)
+    ).resolves.toMatchObject({
+      state: 'released',
+      processAction: 'none',
+      archive: { content: expect.stringContaining('remote output') }
+    })
+    expect(workerRuntime.closeTerminal).not.toHaveBeenCalled()
   })
 
   it('keeps a pre-mutation connectivity failure retryable', async () => {
@@ -515,6 +572,96 @@ describe('federated worker terminal release', () => {
       result: { changed: 1 }
     })
     finishRead()
+
+    await expect(releasing).resolves.toMatchObject({
+      ok: true,
+      result: { state: 'retained', reason: 'user_takeover', processAction: 'none' }
+    })
+    expect(workerRuntime.closeTerminal).not.toHaveBeenCalled()
+  })
+
+  it('preserves user takeover when output capture fails concurrently', async () => {
+    const dispatchId = await startAndSettle()
+    let failRead!: () => void
+    vi.mocked(workerRuntime.readTerminal).mockReturnValueOnce(
+      new Promise((_resolve, reject) => {
+        failRead = () => reject(new Error('capture failed'))
+      })
+    )
+    const releasing = release(dispatchId, 'release_during_failed_capture')
+    await vi.waitFor(() =>
+      expect(workerDb.getRemoteDispatchAttachment(dispatchId)?.release_state).toBe('requested')
+    )
+
+    await expect(reportRemoteUserInput('takeover_during_failed_capture')).resolves.toMatchObject({
+      ok: true,
+      result: { changed: 1 }
+    })
+    failRead()
+
+    await expect(releasing).resolves.toMatchObject({
+      ok: true,
+      result: { state: 'retained', reason: 'user_takeover', processAction: 'none' }
+    })
+    expect(workerDb.getRemoteDispatchAttachment(dispatchId)?.release_error).toBe('user_takeover')
+    expect(workerRuntime.closeTerminal).not.toHaveBeenCalled()
+  })
+
+  it('preserves user takeover when terminal inspection fails concurrently', async () => {
+    const dispatchId = await startAndSettle()
+    let failInspection!: () => void
+    vi.mocked(workerRuntime.showTerminal).mockReturnValueOnce(
+      new Promise((_resolve, reject) => {
+        failInspection = () => reject(new Error('inspection failed'))
+      })
+    )
+    const releasing = release(dispatchId, 'release_during_failed_inspection')
+    await vi.waitFor(() =>
+      expect(workerDb.getRemoteDispatchAttachment(dispatchId)?.release_state).toBe('requested')
+    )
+
+    await expect(reportRemoteUserInput('takeover_during_failed_inspection')).resolves.toMatchObject(
+      { ok: true, result: { changed: 1 } }
+    )
+    failInspection()
+
+    await expect(releasing).resolves.toMatchObject({
+      ok: true,
+      result: { state: 'retained', reason: 'user_takeover', processAction: 'none' }
+    })
+    expect(workerDb.getRemoteDispatchAttachment(dispatchId)?.release_error).toBe('user_takeover')
+    expect(workerRuntime.readTerminal).not.toHaveBeenCalled()
+    expect(workerRuntime.closeTerminal).not.toHaveBeenCalled()
+  })
+
+  it('lets direct remote user input cancel after archive commit but before close commit', async () => {
+    const dispatchId = await startAndSettle()
+    let finishInspection!: () => void
+    const terminal = {
+      handle: HANDLE,
+      worktreeId: 'repo::windows-worktree',
+      connected: true,
+      status: 'running'
+    } as never
+    vi.mocked(workerRuntime.showTerminal)
+      .mockResolvedValueOnce(terminal)
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          finishInspection = () => resolve(terminal)
+        })
+      )
+    const releasing = release(dispatchId, 'release_after_archive_takeover')
+    await vi.waitFor(() =>
+      expect(workerDb.getRemoteDispatchAttachment(dispatchId)?.release_state).toBe('releasing')
+    )
+
+    await expect(
+      reportRemoteUserInput('remote_user_takeover_after_archive')
+    ).resolves.toMatchObject({
+      ok: true,
+      result: { changed: 1 }
+    })
+    finishInspection()
 
     await expect(releasing).resolves.toMatchObject({
       ok: true,
@@ -699,63 +846,3 @@ describe('federated worker terminal release', () => {
     })
   })
 })
-
-function configureWorkerRuntime(runtime: OrcaRuntimeService): void {
-  vi.spyOn(runtime, 'validateOrchestrationAgentLauncher').mockImplementation(() => {})
-  vi.spyOn(runtime, 'showRepo').mockResolvedValue({ id: 'windows-repo', kind: 'git' } as never)
-  vi.spyOn(runtime, 'showManagedTerminalWorkspace').mockResolvedValue({
-    id: 'repo::windows-worktree',
-    repoId: 'repo'
-  } as never)
-  vi.spyOn(runtime, 'createTerminal').mockResolvedValue({ handle: HANDLE } as never)
-  vi.spyOn(runtime, 'createManagedWorktree').mockResolvedValue({
-    worktree: { id: 'repo::windows-worktree', repoId: 'repo' },
-    startupTerminal: { spawned: true, handle: HANDLE },
-    setupReceipt: {
-      requested: 'run',
-      hookFound: true,
-      startupPolicy: 'start-immediately',
-      state: 'running'
-    }
-  } as never)
-  vi.spyOn(runtime, 'listTerminals').mockResolvedValue({
-    terminals: [{ handle: HANDLE, title: 'Codex' }],
-    totalCount: 1,
-    truncated: false
-  } as never)
-  vi.spyOn(runtime, 'waitForTerminal').mockResolvedValue({
-    handle: HANDLE,
-    condition: 'tui-idle',
-    satisfied: true,
-    status: 'running',
-    exitCode: null
-  })
-  vi.spyOn(runtime, 'getTerminalPaneKey').mockReturnValue(PANE_KEY)
-  vi.spyOn(runtime, 'getTerminalProcessIncarnation').mockReturnValue(INCARNATION)
-  vi.spyOn(runtime, 'getTerminalOrchestrationCliCommand').mockReturnValue('orca')
-  vi.spyOn(runtime, 'sendTerminalAgentPrompt').mockResolvedValue({
-    handle: HANDLE,
-    accepted: true,
-    bytesWritten: 1
-  })
-  vi.spyOn(runtime, 'showTerminal').mockResolvedValue({
-    handle: HANDLE,
-    worktreeId: 'repo::windows-worktree',
-    connected: true,
-    status: 'running'
-  } as never)
-  vi.spyOn(runtime, 'readTerminal').mockResolvedValue({
-    handle: HANDLE,
-    status: 'running',
-    tail: ['remote output'],
-    entries: [{ cursor: 1, text: 'remote output' }],
-    nextCursor: '1',
-    limited: false,
-    truncated: false
-  } as never)
-  vi.spyOn(runtime, 'closeTerminal').mockResolvedValue({
-    handle: HANDLE,
-    tabId: 'tab-windows-worker',
-    ptyKilled: true
-  } as never)
-}

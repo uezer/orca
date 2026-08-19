@@ -182,7 +182,8 @@ export function markRemoteAttachmentUserOwned(this: OrchestrationDb, paneKey: st
       .prepare(
         `SELECT dispatch_id, pane_key FROM remote_dispatch_attachments
          WHERE pane_key IS NOT NULL AND state != 'stopping'
-           AND release_state IN ('not_requested', 'retained', 'requested')`
+           AND release_state IN ('not_requested', 'retained', 'requested', 'releasing')
+           AND (release_state != 'releasing' OR release_error IS NULL)`
       )
       .all() as { dispatch_id: string; pane_key: string }[]
     const update = this.db.prepare(
@@ -190,8 +191,9 @@ export function markRemoteAttachmentUserOwned(this: OrchestrationDb, paneKey: st
        SET release_state = 'retained', release_error = 'user_takeover',
            archive_kind = NULL, archive_content = NULL, archive_source = NULL,
            archive_status = NULL, updated_at = datetime('now')
-       WHERE dispatch_id = ? AND state != 'stopping'
-         AND release_state IN ('not_requested', 'retained', 'requested')`
+        WHERE dispatch_id = ? AND state != 'stopping'
+          AND release_state IN ('not_requested', 'retained', 'requested', 'releasing')
+          AND (release_state != 'releasing' OR release_error IS NULL)`
     )
     let changed = 0
     for (const candidate of candidates) {

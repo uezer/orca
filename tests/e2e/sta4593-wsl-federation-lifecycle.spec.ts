@@ -339,7 +339,11 @@ test('proves STA-4593 A/B/C across headed Windows and isolated WSL @headful', as
         return shownB.observation.status
       })
       .toBe('exited')
-    expect(shownB?.terminal).toMatchObject({ handle: workerB.handle })
+    const exitedB = (
+      await local.call<WorkerShow>('orchestration.workerShow', { dispatch: workerB.dispatchId })
+    ).result
+    expect(exitedB.observation.status).toBe('exited')
+    expect(exitedB.terminal).toMatchObject({ handle: workerB.handle })
     expect(readLedger().some((entry) => entry.event === 'exit_marker')).toBe(true)
     const readBAfterClose = await local
       .call<OrchestrationWorkerReadResult>('orchestration.workerRead', {
@@ -422,9 +426,10 @@ test('proves STA-4593 A/B/C across headed Windows and isolated WSL @headful', as
       .catch(() => null)
     if (released.result.state === 'released') {
       expect(archivedB).toMatchObject({ source: 'terminal', archived: true })
-    }
-    if (released.result.state === 'released' && archivedB?.source === 'terminal') {
-      expect.soft(archivedB.terminal.tail.join('\n')).toContain(finalMarker)
+      if (archivedB?.source !== 'terminal') {
+        throw new Error('Released worker archive did not use terminal output')
+      }
+      expect(archivedB.terminal.tail.join('\n')).toContain(finalMarker)
     }
 
     const workerC = await startWorker('C')
@@ -464,13 +469,19 @@ test('proves STA-4593 A/B/C across headed Windows and isolated WSL @headful', as
       ).toBe(false)
     }
   } finally {
-    const listed = await remote
-      .call<RuntimeTerminalListResult>('terminal.list', {})
-      .catch(() => null)
+    const listed = await remote.call<RuntimeTerminalListResult>('terminal.list', {})
     for (const handle of createdHandles) {
-      if (listed?.result.terminals.some((terminal) => terminal.handle === handle)) {
-        await remote.call('terminal.close', { terminal: handle }).catch(() => undefined)
+      if (listed.result.terminals.some((terminal) => terminal.handle === handle)) {
+        await remote.call('terminal.close', { terminal: handle })
       }
     }
+    await expect
+      .poll(async () => {
+        const remaining = await remote.call<RuntimeTerminalListResult>('terminal.list', {})
+        return createdHandles.filter((handle) =>
+          remaining.result.terminals.some((terminal) => terminal.handle === handle)
+        )
+      })
+      .toEqual([])
   }
 })
