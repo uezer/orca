@@ -13,6 +13,7 @@ import type { FederationRelayItemMethods } from './federation/federation-relay-i
 import type { RemoteDispatchAttachmentAuthorityMethods } from './federation/remote-dispatch-attachment-authority'
 import type { RemoteDispatchAttachmentCreateMethods } from './federation/remote-dispatch-attachment-create'
 import type { RemoteDispatchAttachmentStopMethods } from './federation/remote-dispatch-attachment-stop'
+import type { RemoteDispatchAttachmentTopologyMethods } from './federation/remote-dispatch-attachment-topology'
 import type { RemoteQuestionStoreMethods } from './federation/remote-question-store'
 import type { LegacyAskOperationMethods } from './legacy/legacy-ask-operation'
 import type { LegacyCompatibilityCandidatesMethods } from './legacy/legacy-compatibility-candidates'
@@ -100,6 +101,7 @@ export type OrchestrationDbMethods = CreateTablesMethods &
   FederatedDispatchStoreMethods &
   RemoteDispatchAttachmentCreateMethods &
   RemoteDispatchAttachmentAuthorityMethods &
+  RemoteDispatchAttachmentTopologyMethods &
   RemoteDispatchAttachmentStopMethods &
   FederationRelayEnqueueMethods &
   FederationRelayAckMethods &

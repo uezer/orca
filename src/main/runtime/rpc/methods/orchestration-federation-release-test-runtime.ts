@@ -41,6 +41,18 @@ export function configureFederatedReleaseTestRuntime(runtime: OrcaRuntimeService
   vi.spyOn(runtime, 'getTerminalProcessIncarnation').mockReturnValue(
     FEDERATED_RELEASE_TEST_INCARNATION
   )
+  vi.spyOn(runtime, 'resolveTerminalPane').mockReturnValue({
+    handle: FEDERATED_RELEASE_TEST_HANDLE,
+    tabId: 'tab_worker',
+    leafId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    ptyId: 'pty_worker'
+  })
+  vi.spyOn(runtime, 'getOrchestrationDispatchAuthority').mockReturnValue({
+    terminalHandle: FEDERATED_RELEASE_TEST_HANDLE,
+    paneKey: FEDERATED_RELEASE_TEST_PANE_KEY,
+    processIncarnation: FEDERATED_RELEASE_TEST_INCARNATION,
+    hostScope: { kind: 'local', hostId: 'local' }
+  } as never)
   vi.spyOn(runtime, 'getTerminalOrchestrationCliCommand').mockReturnValue('orca')
   vi.spyOn(runtime, 'sendTerminalAgentPrompt').mockResolvedValue({
     handle: FEDERATED_RELEASE_TEST_HANDLE,

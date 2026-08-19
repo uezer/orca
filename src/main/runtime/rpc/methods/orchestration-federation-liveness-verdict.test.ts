@@ -48,6 +48,7 @@ describe('federation host liveness verdicts', () => {
       dispatchId: DISPATCH_ID,
       paneKey: PANE_KEY,
       processIncarnation: INCARNATION,
+      hostScope: JSON.stringify({ kind: 'local', hostId: 'local' }),
       worktreeId: 'repo::remote-worktree',
       terminalHandle: HANDLE,
       setupState: 'not_applicable',

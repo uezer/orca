@@ -17,6 +17,7 @@ import {
 } from './orchestration-federation-setup'
 import { FederationAttachStartParams } from './orchestration-federation-start-schema'
 import { failFederatedAttachmentWithReceipt } from './orchestration-federation-start-receipt'
+import { closeFederatedAgentTerminalWithoutAuthority } from './orchestration-federation-start-cleanup'
 import { prepareFederationAttachmentWorkerStart } from './orchestration-worker-start-validation'
 
 export const ORCHESTRATION_FEDERATION_ATTACH_METHODS: RpcMethod[] = [
@@ -194,15 +195,33 @@ export const ORCHESTRATION_FEDERATION_ATTACH_METHODS: RpcMethod[] = [
           throw new Error('Setup terminal failed to start before the gated agent launch.')
         }
         persistFederatedReadinessStage(setupStage)
-        const paneKey = runtime.getTerminalPaneKey(terminalHandle)
-        const processIncarnation = runtime.getTerminalProcessIncarnation(terminalHandle)
+        db.recordRemoteAttachmentTopology({
+          dispatchId: params.dispatchId,
+          worktreeId: worktree.id,
+          terminalHandle,
+          setupState: setup.state,
+          effects
+        })
+        const terminalAuthority = runtime.getOrchestrationDispatchAuthority(terminalHandle)
+        const paneKey = terminalAuthority?.paneKey
+        const processIncarnation = terminalAuthority?.processIncarnation
         if (!paneKey || !processIncarnation) {
+          await closeFederatedAgentTerminalWithoutAuthority({
+            runtime,
+            db,
+            dispatchId: params.dispatchId,
+            worktreeId: worktree.id,
+            terminalHandle,
+            setupState: setup.state,
+            effects
+          })
           throw new Error('stable_pane_required')
         }
         const capability = db.prepareRemoteAttachmentAuthority({
           dispatchId: params.dispatchId,
           paneKey,
           processIncarnation,
+          hostScope: JSON.stringify(terminalAuthority.hostScope),
           worktreeId: worktree.id,
           terminalHandle,
           setupState: setup.state,

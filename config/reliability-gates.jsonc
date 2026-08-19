@@ -10493,7 +10493,7 @@
       "providers": ["local", "daemon", "ssh", "wsl", "remote-runtime"],
       "coveredPlatforms": ["macos", "windows"],
       "coveredProviders": ["local", "ssh", "wsl", "remote-runtime"],
-      "coverageNotes": "Deterministic service tests cover release-versus-reuse ordering, transactional retain and takeover cancellation, exact host/pane/process identity, dead external/user-owned/transferred/stopped/abandoned reconciliation, conservative unknown provider and legacy metadata handling, immutable transcript and bounded terminal archives, mutation restart, reset cleanup, replay idempotency, federated capability fallback, lost-response recovery, and 50-resource accounting. A macOS Electron journey invokes the freshly compiled worker-release CLI after the worker process disappears. Physical headed and hidden Windows current-main journeys pair to an isolated current-main WSL authority and prove lifecycle settlement, final stdout/stderr plus exit metadata after PTY retirement, archive retention, idempotent retain/release/stop, and unrelated-PTY isolation. A packaged 1.4.184 WSL journey preserves safe old-host retention.",
+      "coverageNotes": "Deterministic service tests cover release-versus-reuse ordering, transactional retain and takeover cancellation, exact host/pane/process identity, dead external/user-owned/transferred/stopped/abandoned reconciliation, conservative unknown provider and legacy metadata handling, immutable transcript and bounded terminal archives, mutation restart, reset cleanup, replay idempotency, federated capability fallback, lost-response recovery, replacement-incarnation input, SSH-scoped crash recovery, exact agent-effect ownership, pre-authority start cleanup, and 50-resource accounting. A macOS Electron journey invokes the freshly compiled worker-release CLI after the worker process disappears. Physical headed and hidden Windows current-main journeys pair to an isolated current-main WSL authority and prove lifecycle settlement, final stdout/stderr plus exit metadata after PTY retirement, archive retention, idempotent retain/release/stop, and unrelated-PTY isolation. A packaged 1.4.184 WSL journey preserves safe old-host retention.",
       "motivatingLinks": [
         "https://github.com/stablyai/orca/pull/12355",
         "https://github.com/stablyai/orca/issues/13860",
@@ -10502,7 +10502,7 @@
         "STA-3932",
         "STA-4593"
       ],
-      "invariant": "A settled Dispatch may close only its one coordinator-created terminal lease, including when the Run home and process owner are different runtimes. Explicit reuse, real user input, retain, identity or host change, ambiguity, and another resource for the same exact host/pane/process must fence closure. The process-owning host must re-prove pane and incarnation, archive bounded output before close, and return one idempotent release receipt; an old host without the negotiated capability remains retained without a guessed local close. Once the authoritative owning provider positively excludes the resource's exact immutable process incarnation, even an external, user-owned, or transferred dead resource must converge to released without any process close. Unknown host scope, missing incarnation metadata, or unavailable inventory must remain retained. Output preservation and the requested-to-releasing transition are atomic, archives remain readable without the provider file, retries resume idempotently, and orchestration reset removes archive and authority state.",
+      "invariant": "A settled Dispatch may close only its one coordinator-created terminal lease, including when the Run home and process owner are different runtimes. Explicit reuse, real user input on the exact incarnation, retain, identity or host change, ambiguity, and another resource for the same exact host/pane/process must fence closure. The process-owning host must re-prove pane, incarnation, and persisted local/WSL/SSH scope, archive bounded output before close, and return one idempotent release receipt; an old host without the negotiated capability remains retained without a guessed local close. Once the authoritative owning provider positively excludes the resource's exact immutable process incarnation, even an external, user-owned, or transferred dead resource must converge to released without any process close. Unknown host scope, missing incarnation metadata, or unavailable inventory must remain retained. Output preservation and the requested-to-releasing transition are atomic, exited transcript memory remains globally bounded, archives remain readable without the provider file, retries resume idempotently, and orchestration reset removes archive and authority state.",
       "oracle": "Record release intent for a settled owner, attempt exact reuse before close, and require worker-start to fail with terminal_release_in_progress while the terminal stays open; then release the original owner exactly once. Race retain and real user input against a controlled archive promise and require no committed archive or close. For retained external, user-owned, transferred, stopped, and abandoned resources, run one fresh inventory against the exact local/WSL or SSH provider: an exact live incarnation and every unknown inventory shape stay retained, while positive absence atomically sets ownership_state and release_state to released with processAction none and zero closeTerminal calls. Change host or process identity and inject duplicate resource evidence to require retention. Freeze a structured transcript, delete its source file, and require archived worker-read to return the same bounded redacted messages. Restart a pending mutation, reset orchestration state, and create 50 resources while asserting replay convergence, zero orphan rows, two-query worker listing, and no unrelated close.",
       "commands": [
         "pnpm exec vitest run --config config/vitest.config.ts src/main/runtime/orca-runtime-process-incarnation-liveness.test.ts src/main/runtime/rpc/methods/orchestration-worker-release.test.ts src/main/runtime/rpc/methods/orchestration-worker-release-recovery.test.ts src/main/runtime/rpc/orchestration-mutation-ledger.test.ts src/main/runtime/orchestration/worker-transcript-read.test.ts src/renderer/src/lib/worker-terminal-takeover-report.test.ts --reporter=dot",
@@ -10510,6 +10510,7 @@
         "pnpm exec vitest run --config config/vitest.config.ts tests/e2e/completed-worker-retirement-resume.unit.test.ts --reporter=verbose",
         "pnpm run build:cli && SKIP_BUILD=1 pnpm exec playwright test tests/e2e/orchestration-worker-settlement-release-cli.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1",
         "pnpm exec vitest run --config config/vitest.config.ts src/main/runtime/rpc/methods/orchestration-federated-worker-release.test.ts --reporter=dot",
+        "pnpm exec vitest run --config config/vitest.config.ts src/main/runtime/orchestration/federated-worker-terminal-ownership.test.ts src/main/runtime/rpc/methods/orchestration-federation-agent-launch.test.ts src/main/runtime/rpc/methods/orchestration-federation-release-recovery.test.ts src/main/runtime/orca-runtime.test.ts --reporter=dot",
         "SKIP_BUILD=1 STA4593_PAIRING_CODE_PATH=<isolated-pairing-code> pnpm exec playwright test tests/e2e/sta4593-wsl-federation-lifecycle.spec.ts --config tests/playwright.config.ts --project electron-headful --workers=1",
         "SKIP_BUILD=1 STA4593_COORDINATOR_MODE=headless STA4593_PAIRING_CODE_PATH=<isolated-pairing-code> pnpm exec playwright test tests/e2e/sta4593-wsl-federation-lifecycle.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1",
         "SKIP_BUILD=1 STA4593_COORDINATOR_MODE=headless STA4593_PAIRING_CODE_PATH=<reverted-current-wsl-pairing-code> pnpm exec playwright test tests/e2e/sta4593-wsl-federation-lifecycle.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1",
@@ -10525,6 +10526,10 @@
         "tests/e2e/completed-worker-retirement-resume.unit.test.ts",
         "tests/e2e/orchestration-worker-settlement-release-cli.spec.ts",
         "src/main/runtime/rpc/methods/orchestration-federated-worker-release.test.ts",
+        "src/main/runtime/orchestration/federated-worker-terminal-ownership.test.ts",
+        "src/main/runtime/rpc/methods/orchestration-federation-agent-launch.test.ts",
+        "src/main/runtime/rpc/methods/orchestration-federation-release-recovery.test.ts",
+        "src/main/runtime/orca-runtime.test.ts",
         "tests/e2e/sta4593-wsl-federation-lifecycle.spec.ts"
       ],
       "assertionRefs": [
@@ -10567,6 +10572,7 @@
           "assertions": [
             "finishes a requested release after restart-style interruption",
             "coalesces overlapping reconciliation passes and closes each resource once",
+            "removes a staged archive when release recovery returns to retained",
             "keeps live terminals bounded across 50 settled workers while controls survive"
           ]
         },
@@ -10576,6 +10582,31 @@
             "the remote owner archives bounded output before closing only its exact terminal",
             "a repeated or lost-response release closes the terminal once and converges",
             "a host without the negotiated release capability stays retained with zero reads or closes"
+          ]
+        },
+        {
+          "file": "src/main/runtime/orchestration/federated-worker-terminal-ownership.test.ts",
+          "assertions": [
+            "only a created effect naming the exact agent terminal grants owned cleanup authority"
+          ]
+        },
+        {
+          "file": "src/main/runtime/rpc/methods/orchestration-federation-agent-launch.test.ts",
+          "assertions": [
+            "a newly created agent terminal is closed or remains reported as residual when stable authority cannot be recorded"
+          ]
+        },
+        {
+          "file": "src/main/runtime/rpc/methods/orchestration-federation-release-recovery.test.ts",
+          "assertions": [
+            "crash recovery probes the persisted SSH process owner and converges an unknown close receipt",
+            "input on a replacement incarnation cannot erase the prior worker archive"
+          ]
+        },
+        {
+          "file": "src/main/runtime/orca-runtime.test.ts",
+          "assertions": [
+            "exited transcripts remain bounded even while their terminal leaves stay open"
           ]
         },
         {
@@ -10675,7 +10706,7 @@
       },
       "performanceBudget": {
         "required": true,
-        "evidence": "Normal owned release performs constant-count indexed resource and identity queries plus one bounded archive capture. A retained release performs exactly one bounded inventory against its authoritative local/WSL or specific SSH provider, with no retry, polling, timer, subprocess, renderer subscription, or per-session follow-up fanout. Worker-list uses two set queries rather than one resource lookup per worker."
+        "evidence": "Normal owned release performs constant-count indexed resource and identity queries plus one bounded archive capture. Takeover checks exact pane identity first and uses a pane-leaf suffix prefilter only for reminted keys. A retained release performs exactly one bounded inventory against its persisted authoritative local/WSL or specific SSH provider, with no retry, polling, timer, subprocess, renderer subscription, or per-session follow-up fanout. Exited transcript payloads are globally capped at 128 records even when leaves stay open. Worker-list uses two set queries rather than one resource lookup per worker."
       },
       "promotionCriteria": [
         "Collect 100 consecutive focused CI passes or 14 days of soak history.",

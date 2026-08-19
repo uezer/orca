@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS remote_dispatch_attachments (
   capability_hash         TEXT,
   pane_key                TEXT,
   process_incarnation     TEXT,
+  host_scope              TEXT,
   state                   TEXT NOT NULL DEFAULT 'starting'
     CHECK(state IN (
       'starting', 'ready', 'start_unknown', 'failed', 'succeeded',

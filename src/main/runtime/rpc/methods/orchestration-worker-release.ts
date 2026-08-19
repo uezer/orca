@@ -170,10 +170,18 @@ export const ORCHESTRATION_WORKER_RELEASE_METHODS: RpcMethod[] = [
     // restarts, SSH drops, remote viewing, and renderer remounts cannot erase the takeover.
     handler: (params, { runtime }) => {
       const db = runtime.getOrchestrationDb()
+      const processIncarnation = (() => {
+        try {
+          const resolved = runtime.resolveTerminalPane(params.paneKey)
+          return runtime.getOrchestrationDispatchAuthority(resolved.handle)?.processIncarnation
+        } catch {
+          return null
+        }
+      })()
       return {
         changed:
-          db.markWorkerTerminalUserOwned(params.paneKey) +
-          db.markRemoteAttachmentUserOwned(params.paneKey)
+          db.markWorkerTerminalUserOwned(params.paneKey, processIncarnation) +
+          db.markRemoteAttachmentUserOwned(params.paneKey, processIncarnation)
       }
     }
   })

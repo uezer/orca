@@ -308,6 +308,7 @@ describe('federated worker terminal release', () => {
         dispatchId: replacementId,
         paneKey: PANE_KEY,
         processIncarnation: INCARNATION,
+        hostScope: JSON.stringify({ kind: 'local', hostId: 'local' }),
         worktreeId: 'repo::windows-worktree',
         terminalHandle: HANDLE,
         setupState: 'not_applicable',
@@ -403,6 +404,10 @@ describe('federated worker terminal release', () => {
       archive: { content: expect.stringContaining('remote output') }
     })
     expect(workerRuntime.closeTerminal).not.toHaveBeenCalled()
+    expect(workerRuntime.inspectTerminalProcessIncarnationLiveness).toHaveBeenCalledWith(
+      INCARNATION,
+      JSON.stringify({ kind: 'local', hostId: 'local' })
+    )
   })
 
   it('keeps a pre-mutation connectivity failure retryable', async () => {
@@ -453,6 +458,7 @@ describe('federated worker terminal release', () => {
         dispatchId: replacementId,
         paneKey: PANE_KEY,
         processIncarnation: INCARNATION,
+        hostScope: JSON.stringify({ kind: 'local', hostId: 'local' }),
         worktreeId: 'repo::windows-worktree',
         terminalHandle: HANDLE,
         setupState: 'not_applicable',
@@ -481,6 +487,7 @@ describe('federated worker terminal release', () => {
         dispatchId: replacementId,
         paneKey: PANE_KEY,
         processIncarnation: INCARNATION,
+        hostScope: JSON.stringify({ kind: 'local', hostId: 'local' }),
         worktreeId: 'repo::windows-worktree',
         terminalHandle: HANDLE,
         setupState: 'not_applicable',
@@ -513,6 +520,7 @@ describe('federated worker terminal release', () => {
         dispatchId: replacementId,
         paneKey: PANE_KEY,
         processIncarnation: INCARNATION,
+        hostScope: JSON.stringify({ kind: 'local', hostId: 'local' }),
         worktreeId: 'repo::windows-worktree',
         terminalHandle: HANDLE,
         setupState: 'not_applicable',
@@ -542,6 +550,7 @@ describe('federated worker terminal release', () => {
         dispatchId: replacementId,
         paneKey: PANE_KEY,
         processIncarnation: INCARNATION,
+        hostScope: JSON.stringify({ kind: 'local', hostId: 'local' }),
         worktreeId: 'repo::windows-worktree',
         terminalHandle: HANDLE,
         setupState: 'not_applicable',

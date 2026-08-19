@@ -197,6 +197,7 @@ export type RemoteDispatchAttachmentRow = {
   capability_hash: string | null
   pane_key: string | null
   process_incarnation: string | null
+  host_scope: string | null
   state: WorkerDispatchState
   stage: string
   worktree_id: string | null

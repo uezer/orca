@@ -41,6 +41,7 @@ describe('orchestration federated message targeting', () => {
       dispatchId,
       paneKey,
       processIncarnation,
+      hostScope: JSON.stringify({ kind: 'local', hostId: 'local' }),
       worktreeId: 'repo::remote-worktree',
       terminalHandle: 'term_remote_worker',
       setupState: 'not_applicable',

@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ORCHESTRATION_METHODS } from './orchestration'
+import { configureWorkerReleasePaneResolution } from './orchestration-worker-release-test-runtime'
 import type { RpcContext } from '../core'
 import { OrchestrationDb } from '../../orchestration/db'
 import { OrcaRuntimeService } from '../../orca-runtime'
@@ -47,6 +48,7 @@ describe('orchestration worker release', () => {
     vi.spyOn(runtime, 'getTerminalProcessIncarnation').mockImplementation((handle) =>
       handle === 'term_worker' || handle === 'term_reminted' ? 'runtime_test:term_worker:1' : null
     )
+    configureWorkerReleasePaneResolution(runtime)
     vi.spyOn(runtime, 'getOrchestrationDispatchAuthority').mockImplementation((handle) =>
       handle === 'term_worker' || handle === 'term_reminted'
         ? ({
@@ -193,7 +195,6 @@ describe('orchestration worker release', () => {
     const resource = db.getWorkerTerminalResourceByOwner(dispatchId)
     expect(resource?.release_state).toBe('released')
     expect(resource?.ownership_state).toBe('released')
-    // Outcome is untouched by release.
     expect(db.getWorkerDispatch(dispatchId)?.state).toBe('succeeded')
   })
 
@@ -510,7 +511,6 @@ describe('orchestration worker release', () => {
       /Output could not be preserved/
     )
     expect(runtime.closeTerminal).not.toHaveBeenCalled()
-    // Durable intent survives for recovery.
     expect(db.getWorkerTerminalResourceByOwner(dispatchId)?.release_state).toBe('requested')
   })
 
@@ -610,7 +610,6 @@ describe('orchestration worker release', () => {
     })) as { terminal: { tail: string[] }; cursor: string | null }
     expect(page2.terminal.tail).toEqual(['last line'])
     expect(page2.cursor).toBeNull()
-    // The live terminal is never consulted after release.
     expect(runtime.readTerminal).not.toHaveBeenCalled()
   })
 

@@ -332,6 +332,7 @@ describe('OrchestrationDb worker Dispatch state', () => {
         dispatchId,
         paneKey,
         processIncarnation: `process_${dispatchId}`,
+        hostScope: JSON.stringify({ kind: 'local', hostId: 'local' }),
         worktreeId: 'repo::worktree',
         terminalHandle: `term_${dispatchId}`,
         setupState: 'not_applicable',

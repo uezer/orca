@@ -65,6 +65,7 @@ describe('orchestration federated setup evidence', () => {
       dispatchId,
       paneKey: 'tab_worker:leaf_worker',
       processIncarnation: 'worker_epoch:pty:1',
+      hostScope: JSON.stringify({ kind: 'local', hostId: 'local' }),
       worktreeId: 'repo::remote-worktree',
       terminalHandle: 'term_remote_worker',
       setupState: 'running',

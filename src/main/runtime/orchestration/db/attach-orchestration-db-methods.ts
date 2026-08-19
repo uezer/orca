@@ -13,6 +13,7 @@ import { attachFederationRelayItem } from './federation/federation-relay-item'
 import { attachRemoteDispatchAttachmentAuthority } from './federation/remote-dispatch-attachment-authority'
 import { attachRemoteDispatchAttachmentCreate } from './federation/remote-dispatch-attachment-create'
 import { attachRemoteDispatchAttachmentStop } from './federation/remote-dispatch-attachment-stop'
+import { attachRemoteDispatchAttachmentTopology } from './federation/remote-dispatch-attachment-topology'
 import { attachRemoteQuestionStore } from './federation/remote-question-store'
 import { attachLegacyAskOperation } from './legacy/legacy-ask-operation'
 import { attachLegacyCompatibilityCandidates } from './legacy/legacy-compatibility-candidates'
@@ -101,6 +102,7 @@ export function attachOrchestrationDbMethods(ctor: { prototype: object }): void 
   attachFederatedDispatchStore(ctor)
   attachRemoteDispatchAttachmentCreate(ctor)
   attachRemoteDispatchAttachmentAuthority(ctor)
+  attachRemoteDispatchAttachmentTopology(ctor)
   attachRemoteDispatchAttachmentStop(ctor)
   attachFederationRelayEnqueue(ctor)
   attachFederationRelayAck(ctor)

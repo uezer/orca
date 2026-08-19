@@ -16023,6 +16023,52 @@ describe('OrcaRuntimeService', () => {
     })
   })
 
+  it('bounds exited transcripts even while their terminal leaves remain open', async () => {
+    const runtime = new OrcaRuntimeService(store)
+    const tabs = Array.from({ length: 140 }, (_, index) => ({
+      tabId: `tab-retained-${index}`,
+      worktreeId: TEST_WORKTREE_ID,
+      title: `retained-${index}`,
+      activeLeafId: HEADLESS_LEAF_ID,
+      layout: null
+    }))
+    const leaves = Array.from({ length: 140 }, (_, index) => ({
+      tabId: `tab-retained-${index}`,
+      worktreeId: TEST_WORKTREE_ID,
+      leafId: HEADLESS_LEAF_ID,
+      paneRuntimeId: index + 1,
+      ptyId: `pty-retained-${index}`,
+      paneTitle: null
+    }))
+    runtime.attachWindow(1)
+    runtime.syncWindowGraph(1, { tabs, leaves })
+
+    const handles: string[] = []
+    for (let index = 0; index < 140; index += 1) {
+      runtime.registerPty(`pty-retained-${index}`, TEST_WORKTREE_ID)
+      handles.push(runtime.preAllocateHandleForPty(`pty-retained-${index}`))
+      runtime.onPtyData(`pty-retained-${index}`, `retained-${index}\n`, 100 + index)
+      runtime.onPtyExit(`pty-retained-${index}`, 0)
+    }
+
+    const internals = runtime as unknown as {
+      ptysById: Map<string, { tailTranscriptBuffer: string[] }>
+    }
+    expect(internals.ptysById.size).toBe(140)
+    expect(internals.ptysById.get('pty-retained-0')?.tailTranscriptBuffer).toEqual([])
+    expect(internals.ptysById.get('pty-retained-139')?.tailTranscriptBuffer).toEqual([
+      'retained-139'
+    ])
+    await expect(runtime.readTerminal(handles[0]!)).resolves.toMatchObject({
+      status: 'exited',
+      tail: []
+    })
+    await expect(runtime.readTerminal(handles.at(-1)!)).resolves.toMatchObject({
+      status: 'exited',
+      tail: ['retained-139']
+    })
+  })
+
   it('keeps retained PTY transcript memory when controller refresh omits a record', async () => {
     const runtime = new OrcaRuntimeService(store)
     runtime.setPtyController({

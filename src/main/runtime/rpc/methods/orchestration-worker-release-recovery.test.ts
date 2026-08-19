@@ -193,6 +193,24 @@ describe('orchestration worker release recovery', () => {
     })
   })
 
+  it('removes a staged archive when release recovery returns to retained', async () => {
+    setup()
+    const { dispatchId } = await startSettledWorker()
+    const resource = db.getWorkerTerminalResourceByOwner(dispatchId)!
+    expect(db.requestWorkerTerminalRelease(dispatchId).disposition).toBe('requested')
+    db.storeWorkerTerminalArchive({
+      dispatchId,
+      resourceId: resource.id,
+      kind: 'terminal_tail',
+      content: '["staged"]'
+    })
+
+    expect(db.revertWorkerTerminalReleaseToRetained(resource.id, 'user_takeover')).toMatchObject({
+      release_state: 'retained'
+    })
+    expect(db.getWorkerTerminalArchive(dispatchId)).toBeUndefined()
+  })
+
   it('never touches resources without requested releases', async () => {
     setup()
     await startSettledWorker()

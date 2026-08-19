@@ -1,4 +1,5 @@
 import type { WorkerDispatchRow } from '../../types'
+import { federatedAgentTerminalWasCreated } from '../../federated-worker-terminal-ownership'
 import { OrchestrationError } from '../../orchestration-error'
 import type { OrchestrationDb } from '../orchestration-db'
 import { reconcileTaskAfterDispatchInterruption } from '../dispatch-context/task-dispatch-reconciliation'
@@ -42,16 +43,7 @@ export function reconcileFederatedWorkerStart(
       params.processIncarnation &&
       !this.getWorkerTerminalResourceByOwner(params.dispatchId)
     ) {
-      const effects = params.effects ?? []
-      const owned = effects.some(
-        (effect) =>
-          Boolean(effect) &&
-          typeof effect === 'object' &&
-          (effect as { kind?: string }).kind === 'terminal' &&
-          ['created', 'reused_agent_terminal'].includes(
-            (effect as { action?: string }).action ?? ''
-          )
-      )
+      const owned = federatedAgentTerminalWasCreated(params.effects ?? [], params.terminalHandle)
       this.createWorkerTerminalResourceStatement({
         dispatchId: params.dispatchId,
         worktreeId: params.worktreeId,

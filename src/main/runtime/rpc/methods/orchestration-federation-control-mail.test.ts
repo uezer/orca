@@ -120,6 +120,7 @@ describe('orchestration federation control mail', () => {
       dispatchId,
       paneKey: workerPaneKey,
       processIncarnation,
+      hostScope: JSON.stringify({ kind: 'local', hostId: 'local' }),
       worktreeId: 'repo::worker',
       terminalHandle: 'term_worker',
       setupState: 'not_applicable',

@@ -2,7 +2,11 @@ import { randomBytes, timingSafeEqual } from 'node:crypto'
 import type { RemoteDispatchAttachmentRow } from '../../types'
 import { OrchestrationError } from '../../orchestration-error'
 import { hashDispatchCapability } from '../dispatch-capability-hash'
-import { isEquivalentPaneKey } from '../pane-key-match'
+import {
+  isEquivalentPaneKey,
+  paneKeyMatchSuffix,
+  REMOTE_ATTACHMENT_PANE_KEY_MATCH_SUFFIX_SQL
+} from '../pane-key-match'
 import type { OrchestrationDb } from '../orchestration-db'
 import { claimRemoteAttachmentLeaseForStart } from './remote-dispatch-attachment-lease'
 
@@ -12,6 +16,7 @@ export function prepareRemoteAttachmentAuthority(
     dispatchId: string
     paneKey: string
     processIncarnation: string
+    hostScope: string
     worktreeId: string
     terminalHandle: string
     setupState: string
@@ -33,7 +38,7 @@ export function prepareRemoteAttachmentAuthority(
       .prepare(
         `UPDATE remote_dispatch_attachments
          SET stage = 'authority_attached', capability_hash = ?, pane_key = ?,
-             process_incarnation = ?, worktree_id = ?, terminal_handle = ?, setup_state = ?,
+             process_incarnation = ?, host_scope = ?, worktree_id = ?, terminal_handle = ?, setup_state = ?,
              effects = ?, residual_resources = ?, updated_at = datetime('now')
          WHERE dispatch_id = ? AND state = 'starting'`
       )
@@ -41,6 +46,7 @@ export function prepareRemoteAttachmentAuthority(
         hashDispatchCapability(capability),
         params.paneKey,
         params.processIncarnation,
+        params.hostScope,
         params.worktreeId,
         params.terminalHandle,
         params.setupState,
@@ -175,31 +181,75 @@ export function isRemoteAttachmentProcessCurrent(
   )
 }
 
-export function markRemoteAttachmentUserOwned(this: OrchestrationDb, paneKey: string): number {
+export function markRemoteAttachmentUserOwned(
+  this: OrchestrationDb,
+  paneKey: string,
+  processIncarnation: string | null = null
+): number {
   this.db.exec('BEGIN IMMEDIATE')
   try {
-    const candidates = this.db
+    const exact = this.db
       .prepare(
-        `SELECT dispatch_id, pane_key FROM remote_dispatch_attachments
-         WHERE pane_key IS NOT NULL AND state != 'stopping'
+        `SELECT dispatch_id, pane_key, process_incarnation FROM remote_dispatch_attachments
+         WHERE pane_key = ? AND state != 'stopping'
            AND release_state IN ('not_requested', 'retained', 'requested', 'releasing')
            AND (release_state != 'releasing' OR release_error IS NULL)`
       )
-      .all() as { dispatch_id: string; pane_key: string }[]
-    const update = this.db.prepare(
+      .all(paneKey) as {
+      dispatch_id: string
+      pane_key: string
+      process_incarnation: string | null
+    }[]
+    const candidates =
+      exact.length > 0
+        ? exact
+        : (this.db
+            .prepare(
+              `SELECT dispatch_id, pane_key, process_incarnation FROM remote_dispatch_attachments
+               WHERE pane_key IS NOT NULL AND ${REMOTE_ATTACHMENT_PANE_KEY_MATCH_SUFFIX_SQL} = ?
+                 AND state != 'stopping'
+                 AND release_state IN ('not_requested', 'retained', 'requested', 'releasing')
+                 AND (release_state != 'releasing' OR release_error IS NULL)`
+            )
+            .all(paneKeyMatchSuffix(paneKey)) as {
+            dispatch_id: string
+            pane_key: string
+            process_incarnation: string | null
+          }[])
+    const retain = this.db.prepare(
       `UPDATE remote_dispatch_attachments
        SET release_state = 'retained', release_error = 'user_takeover',
-           archive_kind = NULL, archive_content = NULL, archive_source = NULL,
-           archive_status = NULL, updated_at = datetime('now')
+           updated_at = datetime('now')
         WHERE dispatch_id = ? AND state != 'stopping'
           AND release_state IN ('not_requested', 'retained', 'requested', 'releasing')
           AND (release_state != 'releasing' OR release_error IS NULL)`
     )
+    const retainExact = this.db.prepare(
+      `UPDATE remote_dispatch_attachments
+       SET release_state = 'retained', release_error = 'user_takeover',
+           archive_kind = NULL, archive_content = NULL, archive_source = NULL,
+           archive_status = NULL, updated_at = datetime('now')
+       WHERE dispatch_id = ? AND process_incarnation = ? AND state != 'stopping'
+         AND release_state IN ('not_requested', 'retained', 'requested', 'releasing')
+         AND (release_state != 'releasing' OR release_error IS NULL)`
+    )
     let changed = 0
     for (const candidate of candidates) {
-      if (isEquivalentPaneKey(candidate.pane_key, paneKey)) {
-        changed += Number(update.run(candidate.dispatch_id).changes)
+      if (!isEquivalentPaneKey(candidate.pane_key, paneKey)) {
+        continue
       }
+      if (
+        processIncarnation &&
+        candidate.process_incarnation &&
+        candidate.process_incarnation !== processIncarnation
+      ) {
+        continue
+      }
+      changed += Number(
+        processIncarnation !== null && processIncarnation === candidate.process_incarnation
+          ? retainExact.run(candidate.dispatch_id, processIncarnation).changes
+          : retain.run(candidate.dispatch_id).changes
+      )
     }
     this.db.exec('COMMIT')
     return changed

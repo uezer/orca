@@ -22,7 +22,6 @@ import {
 
 const Params = z.object({ dispatchId: requiredString('Missing Dispatch ID') })
 const activeReleaseRequests = new Set<string>()
-const LOCAL_TERMINAL_HOST_SCOPE = JSON.stringify({ kind: 'local', hostId: 'local' })
 
 export const ORCHESTRATION_FEDERATION_RELEASE_METHODS: RpcMethod[] = [
   defineMethod({
@@ -57,7 +56,7 @@ export const ORCHESTRATION_FEDERATION_RELEASE_METHODS: RpcMethod[] = [
         throw new Error('Federated release requires a durable request identity.')
       }
       const resumingArchivedRelease =
-        attachment.release_state === 'releasing' &&
+        ['releasing', 'unknown'].includes(attachment.release_state ?? '') &&
         attachment.release_request_id === orchestrationMutation.requestId &&
         Boolean(federatedReleaseArchive(attachment))
       const activeKey = `${runtime.getRuntimeId()}:${params.dispatchId}:${orchestrationMutation.requestId}`
@@ -94,9 +93,10 @@ export const ORCHESTRATION_FEDERATION_RELEASE_METHODS: RpcMethod[] = [
           resumingArchivedRelease &&
           observation.status === 'missing' &&
           attachment.process_incarnation &&
+          attachment.host_scope &&
           (await runtime.inspectTerminalProcessIncarnationLiveness(
             attachment.process_incarnation,
-            LOCAL_TERMINAL_HOST_SCOPE
+            attachment.host_scope
           )) === 'exited'
         ) {
           const settled = settleFederatedRelease(

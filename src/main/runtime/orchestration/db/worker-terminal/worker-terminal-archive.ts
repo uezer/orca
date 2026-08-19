@@ -144,14 +144,27 @@ export function revertWorkerTerminalReleaseToRetained(
   resourceId: string,
   reason: WorkerTerminalRetainedReason
 ): WorkerTerminalResourceRow {
-  this.db
-    .prepare(
-      `UPDATE worker_terminal_resources
-       SET release_state = 'retained', retained_reason = ?, updated_at = datetime('now')
-       WHERE id = ? AND release_state IN ('requested', 'releasing')`
-    )
-    .run(reason, resourceId)
-  return this.getWorkerTerminalResource(resourceId) as WorkerTerminalResourceRow
+  this.db.exec('BEGIN IMMEDIATE')
+  try {
+    this.db
+      .prepare(
+        `UPDATE worker_terminal_resources
+         SET release_state = 'retained', retained_reason = ?, updated_at = datetime('now')
+         WHERE id = ? AND release_state IN ('requested', 'releasing')`
+      )
+      .run(reason, resourceId)
+    const resource = this.getWorkerTerminalResource(resourceId) as WorkerTerminalResourceRow
+    if (resource.release_state === 'retained') {
+      this.db
+        .prepare('DELETE FROM worker_terminal_archives WHERE dispatch_id = ?')
+        .run(resource.owner_dispatch_id)
+    }
+    this.db.exec('COMMIT')
+    return resource
+  } catch (error) {
+    this.db.exec('ROLLBACK')
+    throw error
+  }
 }
 
 export function retainWorkerTerminalResource(

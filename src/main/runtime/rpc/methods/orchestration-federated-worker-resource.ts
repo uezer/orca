@@ -1,4 +1,5 @@
 import type { OrchestrationDb } from '../../orchestration/db'
+import { federatedAgentTerminalWasCreated } from '../../orchestration/federated-worker-terminal-ownership'
 
 export function recordFederatedWorkerTerminalResource(args: {
   db: OrchestrationDb
@@ -38,12 +39,9 @@ export function recordFederatedWorkerTerminalResource(args: {
     })
     return
   }
-  const terminalCreated = (remote.effects ?? []).some(
-    (effect) =>
-      Boolean(effect) &&
-      typeof effect === 'object' &&
-      (effect as { kind?: string; action?: string }).kind === 'terminal' &&
-      ['created', 'reused_agent_terminal'].includes((effect as { action?: string }).action ?? '')
+  const terminalCreated = federatedAgentTerminalWasCreated(
+    remote.effects ?? [],
+    remote.terminalHandle
   )
   args.db.createWorkerTerminalResourceStatement({
     dispatchId: args.dispatchId,

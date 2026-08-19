@@ -32837,6 +32837,23 @@ export class OrcaRuntimeService {
   }
 
   private pruneDisconnectedPtyRecords(): void {
+    const transcriptRecords = [...this.ptysById.values()]
+      .filter(
+        (pty) =>
+          !pty.connected &&
+          (pty.tailTranscriptBuffer.length > 0 ||
+            pty.tailBuffer.length > 0 ||
+            pty.tailPartialLine.length > 0)
+      )
+      .sort((a, b) => (a.disconnectedAt ?? 0) - (b.disconnectedAt ?? 0))
+    const staleTranscriptCount = Math.max(0, transcriptRecords.length - DISCONNECTED_PTY_RECORD_MAX)
+    for (const stale of transcriptRecords.slice(0, staleTranscriptCount)) {
+      this.resetRetainedTerminalTranscript(stale)
+      for (const leaf of this.getLeavesForPty(stale.ptyId)) {
+        this.resetRetainedTerminalTranscript(leaf)
+      }
+      this.recentPtyOutputById.delete(stale.ptyId)
+    }
     const retained = [...this.ptysById.values()]
       .filter((pty) => !pty.connected && !this.leafExistsForPty(pty.ptyId))
       .sort((a, b) => (a.disconnectedAt ?? 0) - (b.disconnectedAt ?? 0))
