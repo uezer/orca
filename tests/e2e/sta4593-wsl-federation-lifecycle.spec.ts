@@ -9,7 +9,10 @@ import { waitForActivePaneHookDescriptor, waitForActivePanePtyId } from './helpe
 import { RuntimeClient } from '../../src/cli/runtime-client'
 import type { RuntimeStatus, RuntimeTerminalListResult } from '../../src/shared/runtime-types'
 import type { OrchestrationWorkerReadResult } from '../../src/shared/orchestration-worker-output'
-import { ORCHESTRATION_FEDERATION_WORKER_RELEASE_RUNTIME_CAPABILITY } from '../../src/shared/protocol-version'
+import {
+  ORCHESTRATION_FEDERATION_WORKER_RELEASE_RUNTIME_CAPABILITY,
+  ORCHESTRATION_WORKER_STOP_VERDICT_RUNTIME_CAPABILITY
+} from '../../src/shared/protocol-version'
 
 const pairingCodePath =
   process.env.STA4593_PAIRING_CODE_PATH ?? path.join(os.tmpdir(), 'sta4593-pairing-code.txt')
@@ -191,6 +194,9 @@ test(`proves STA-4593 A/B/C across ${coordinatorMode} Windows and isolated WSL $
   const remoteStatus = (await remote.call<RuntimeStatus>('status.get', {})).result
   const supportsFederatedRelease = remoteStatus.capabilities?.includes(
     ORCHESTRATION_FEDERATION_WORKER_RELEASE_RUNTIME_CAPABILITY
+  )
+  const supportsStopVerdict = remoteStatus.capabilities?.includes(
+    ORCHESTRATION_WORKER_STOP_VERDICT_RUNTIME_CAPABILITY
   )
   const coordinator = await local.call<{ terminal: { handle: string } }>('terminal.resolvePane', {
     paneKey: coordinatorPane.paneKey
@@ -474,13 +480,19 @@ test(`proves STA-4593 A/B/C across ${coordinatorMode} Windows and isolated WSL $
       processAction: string
       alreadySettled: boolean
     }>('orchestration.workerStop', { dispatch: workerC.dispatchId })
-    expect(stopped.result.alreadySettled).toBe(false)
-    expect(['stopped', 'stop_unknown']).toContain(stopped.result.state)
-    if (stopped.result.state === 'stopped') {
-      expect(stopped.result.processAction).toBe('closed_agent_terminal')
-    } else {
-      expect(stopped.result.processAction).toBe('none')
-    }
+    expect(stopped.result, JSON.stringify(stopped.result)).toMatchObject(
+      supportsStopVerdict
+        ? {
+            state: 'stopped',
+            processAction: 'closed_agent_terminal',
+            alreadySettled: false
+          }
+        : {
+            state: 'stop_unknown',
+            processAction: 'none',
+            alreadySettled: false
+          }
+    )
     const stoppedAgain = await local
       .call<{
         state: string

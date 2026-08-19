@@ -10511,7 +10511,9 @@
         "pnpm run build:cli && SKIP_BUILD=1 pnpm exec playwright test tests/e2e/orchestration-worker-settlement-release-cli.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1",
         "pnpm exec vitest run --config config/vitest.config.ts src/main/runtime/rpc/methods/orchestration-federated-worker-release.test.ts --reporter=dot",
         "SKIP_BUILD=1 STA4593_PAIRING_CODE_PATH=<isolated-pairing-code> pnpm exec playwright test tests/e2e/sta4593-wsl-federation-lifecycle.spec.ts --config tests/playwright.config.ts --project electron-headful --workers=1",
-        "SKIP_BUILD=1 STA4593_COORDINATOR_MODE=headless STA4593_PAIRING_CODE_PATH=<isolated-pairing-code> pnpm exec playwright test tests/e2e/sta4593-wsl-federation-lifecycle.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1"
+        "SKIP_BUILD=1 STA4593_COORDINATOR_MODE=headless STA4593_PAIRING_CODE_PATH=<isolated-pairing-code> pnpm exec playwright test tests/e2e/sta4593-wsl-federation-lifecycle.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1",
+        "SKIP_BUILD=1 STA4593_COORDINATOR_MODE=headless STA4593_PAIRING_CODE_PATH=<reverted-current-wsl-pairing-code> pnpm exec playwright test tests/e2e/sta4593-wsl-federation-lifecycle.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1",
+        "SKIP_BUILD=1 STA4593_COORDINATOR_MODE=headless STA4593_PAIRING_CODE_PATH=<packaged-1.4.184-pairing-code> pnpm exec playwright test tests/e2e/sta4593-wsl-federation-lifecycle.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1"
       ],
       "testFiles": [
         "src/main/runtime/orca-runtime-process-incarnation-liveness.test.ts",
@@ -10599,6 +10601,24 @@
           "date": "2026-08-18",
           "runner": "manual",
           "platform": "windows",
+          "command": "SKIP_BUILD=1 STA4593_COORDINATOR_MODE=headless STA4593_PAIRING_CODE_PATH=<reverted-current-wsl-pairing-code> pnpm exec playwright test tests/e2e/sta4593-wsl-federation-lifecycle.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1",
+          "result": "failed",
+          "durationSeconds": 41,
+          "summary": "With only the owning WSL runtime reverted to 3f961ddc01, the unchanged oracle passed A then failed B because authoritative worker-read no longer contained the final marker after PTY exit."
+        },
+        {
+          "date": "2026-08-18",
+          "runner": "manual",
+          "platform": "windows",
+          "command": "SKIP_BUILD=1 STA4593_COORDINATOR_MODE=headless STA4593_PAIRING_CODE_PATH=<packaged-1.4.184-pairing-code> pnpm exec playwright test tests/e2e/sta4593-wsl-federation-lifecycle.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1",
+          "result": "passed",
+          "durationSeconds": 25,
+          "summary": "Current Windows candidate paired to packaged WSL 1.4.184 and preserved the legacy capability shape: unsupported release stayed retained, stop stayed unknown with processAction none, and no unrelated PTY was closed."
+        },
+        {
+          "date": "2026-08-18",
+          "runner": "manual",
+          "platform": "windows",
           "command": "SKIP_BUILD=1 STA4593_PAIRING_CODE_PATH=<isolated-pairing-code> pnpm exec playwright test tests/e2e/sta4593-wsl-federation-lifecycle.spec.ts --config tests/playwright.config.ts --project electron-headful --workers=1",
           "result": "passed",
           "durationSeconds": 50,
@@ -10651,7 +10671,7 @@
       },
       "redGreenEvidence": {
         "status": "complete",
-        "evidence": "The byte-identical compiled-CLI Electron oracle left the dead resource external/retained on latest main 5ea7df1a5b, passed on combined candidate d697666ce8 with released/released SQLite state and processAction none, and reproduced external/retained after disabling the claimed production files at merge-base 64aec94cb2. The earlier unchanged three-case dead external/user-owned/transferred service oracle likewise failed 3/3 on main, passed 3/3 on candidate, and failed 3/3 with production restored; every run asserted durable state and zero terminal close calls."
+        "evidence": "For STA-4593, the unchanged physical Windows-to-WSL oracle failed final-output retention with the owning WSL runtime at 3f961ddc01, exposed stop_unknown/tab_not_found with only transcript retention applied, and passed strict A/B/C headed and hidden with both bounded fixes. The byte-identical compiled-CLI Electron oracle also left the dead resource external/retained on latest main 5ea7df1a5b, passed on combined candidate d697666ce8 with released/released SQLite state and processAction none, and reproduced external/retained after disabling the claimed production files at merge-base 64aec94cb2."
       },
       "performanceBudget": {
         "required": true,
