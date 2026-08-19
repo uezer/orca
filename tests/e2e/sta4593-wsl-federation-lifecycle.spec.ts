@@ -61,6 +61,8 @@ type LedgerEntry = {
   terminal?: string
 }
 
+let ledgerBaselineLength = 0
+
 function pairingCode(): string {
   if (!existsSync(pairingCodePath)) {
     throw new Error(`Missing STA-4593 pairing code at ${pairingCodePath}`)
@@ -68,7 +70,7 @@ function pairingCode(): string {
   return readFileSync(pairingCodePath, 'utf8').trim()
 }
 
-function readLedger(): LedgerEntry[] {
+function readLedgerFile(): LedgerEntry[] {
   if (!existsSync(remoteLedgerPath)) {
     return []
   }
@@ -76,6 +78,10 @@ function readLedger(): LedgerEntry[] {
     .split(/\r?\n/)
     .filter(Boolean)
     .map((line) => JSON.parse(line) as LedgerEntry)
+}
+
+function readLedger(): LedgerEntry[] {
+  return readLedgerFile().slice(ledgerBaselineLength)
 }
 
 function encodeMarker(input: Record<string, unknown>): string {
@@ -135,6 +141,7 @@ test('proves STA-4593 A/B/C across headed Windows and isolated WSL @headful', as
   orcaPage
 }) => {
   test.setTimeout(300_000)
+  ledgerBaselineLength = readLedgerFile().length
   await waitForSessionReady(orcaPage)
   await waitForActiveWorktree(orcaPage)
   await ensureTerminalVisible(orcaPage)
