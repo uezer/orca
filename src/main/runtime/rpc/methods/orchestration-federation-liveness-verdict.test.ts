@@ -125,6 +125,23 @@ describe('federation host liveness verdicts', () => {
     expect(outcome).not.toMatchObject({ code: 'worker_identity_changed' })
   })
 
+  it('rejects legacy output when the process identity changes during the read', async () => {
+    vi.spyOn(runtime, 'showTerminal').mockResolvedValue({
+      handle: HANDLE,
+      worktreeId: 'repo::remote-worktree',
+      connected: true,
+      status: 'running'
+    } as never)
+    vi.spyOn(runtime, 'readTerminal').mockImplementation(async () => {
+      vi.mocked(runtime.getTerminalProcessIncarnation).mockReturnValue('runtime:replacement:8')
+      return { handle: HANDLE, status: 'running', tail: ['replacement output'] } as never
+    })
+
+    await expect(
+      call('orchestration.federationRead', { dispatchId: DISPATCH_ID })
+    ).rejects.toMatchObject({ code: 'worker_identity_changed' })
+  })
+
   it('does not relay an unconfirmed close home as a settled stop', async () => {
     vi.spyOn(runtime, 'getTerminalLivenessVerdict').mockReturnValue({
       status: 'unverifiable',

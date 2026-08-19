@@ -2,7 +2,7 @@ import { migrateMutationReceiptCapacity } from '../../mutation-receipt-capacity'
 import { DISPATCH_PANE_KEY_MATCH_SUFFIX_SQL } from '../pane-key-match'
 import type { OrchestrationDb } from '../orchestration-db'
 
-export function applySchemaMigrationsV13ToV29(this: OrchestrationDb, current: number): void {
+export function applySchemaMigrationsV13ToV30(this: OrchestrationDb, current: number): void {
   if (current < 13 && !this.hasColumn('worker_dispatches', 'runtime_epoch')) {
     this.db.exec('ALTER TABLE worker_dispatches ADD COLUMN runtime_epoch TEXT')
   }
@@ -156,6 +156,29 @@ export function applySchemaMigrationsV13ToV29(this: OrchestrationDb, current: nu
   // against external logs to tell them apart (STA-4603).
   if (current < 29 && !this.hasColumn('dispatch_contexts', 'termination_reason')) {
     this.db.exec('ALTER TABLE dispatch_contexts ADD COLUMN termination_reason TEXT')
+  }
+  if (current < 30) {
+    const columns: [string, string][] = [
+      ['release_state', "TEXT NOT NULL DEFAULT 'not_requested'"],
+      ['archive_kind', 'TEXT'],
+      ['archive_content', 'TEXT'],
+      ['archive_source', 'TEXT'],
+      ['archive_status', 'TEXT'],
+      ['release_error', 'TEXT'],
+      ['release_request_id', 'TEXT'],
+      ['release_requested_at', 'TEXT'],
+      ['release_completed_at', 'TEXT']
+    ]
+    for (const [name, definition] of columns) {
+      if (!this.hasColumn('remote_dispatch_attachments', name)) {
+        this.db.exec(`ALTER TABLE remote_dispatch_attachments ADD COLUMN ${name} ${definition}`)
+      }
+    }
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_remote_dispatch_attachments_unreleased_process
+        ON remote_dispatch_attachments(process_incarnation)
+        WHERE release_state != 'released' AND process_incarnation IS NOT NULL;
+    `)
   }
   this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_dispatch_assignee_pane_leaf

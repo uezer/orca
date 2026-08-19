@@ -1,12 +1,8 @@
-import { z } from 'zod'
-import {
-  ORCHESTRATION_WORKER_READ_SOURCES,
-  type OrchestrationWorkerReadResult
-} from '../../../../shared/orchestration-worker-output'
+import type { OrchestrationWorkerReadResult } from '../../../../shared/orchestration-worker-output'
 import { contextOnlyAbandonWarning } from '../../orchestration/context-only-dispatch-release'
 import { OrchestrationError } from '../../orchestration/orchestration-error'
 import { defineMethod, type RpcMethod } from '../core'
-import { OptionalFiniteNumber, requiredString } from '../schemas'
+import { WorkerDispatchParams, WorkerReadParams } from './orchestration-worker-read-schema'
 import {
   callFederatedWorkerShow,
   exposeWorker,
@@ -18,14 +14,7 @@ import { readArchivedWorkerOutput } from './orchestration-worker-archive-read'
 import { readLegacyFederatedTerminal } from './orchestration-worker-legacy-federated-read'
 import { readExactWorkerOutput } from './orchestration-worker-output'
 import { exposeWorkerTerminalResource } from './orchestration-worker-release-completion'
-
-const WorkerDispatchParams = z.object({ dispatch: requiredString('Missing --dispatch') })
-const WorkerReadParams = WorkerDispatchParams.extend({
-  cursor: z.union([z.number().int().nonnegative(), z.string().min(1).max(2_048)]).optional(),
-  limit: OptionalFiniteNumber,
-  source: z.enum(ORCHESTRATION_WORKER_READ_SOURCES).optional()
-})
-
+import { readFederatedArchivedWorkerOutput } from './orchestration-federated-worker-read'
 export const ORCHESTRATION_WORKER_CONTROL_METHODS: RpcMethod[] = [
   defineMethod({
     name: 'orchestration.workerShow',
@@ -77,6 +66,9 @@ export const ORCHESTRATION_WORKER_CONTROL_METHODS: RpcMethod[] = [
             lastError: attachment.last_error,
             worktreeId: attachment.worktree_id,
             terminalHandle: attachment.terminal_handle,
+            paneKey: attachment.pane_key,
+            processIncarnation: attachment.process_incarnation,
+            hostScope: server.environmentId,
             setupState: attachment.setup_state,
             effects: attachment.effects,
             residualResources: attachment.residualResources
@@ -158,6 +150,20 @@ export const ORCHESTRATION_WORKER_CONTROL_METHODS: RpcMethod[] = [
       const db = runtime.getOrchestrationDb()
       const federated = db.getFederatedDispatch(params.dispatch)
       if (federated) {
+        const resource = db.getWorkerTerminalResourceByOwner(params.dispatch)
+        if (
+          resource &&
+          db.getWorkerTerminalArchive(params.dispatch) &&
+          ['releasing', 'unknown', 'released'].includes(resource.release_state)
+        ) {
+          return readFederatedArchivedWorkerOutput({
+            db,
+            dispatchId: params.dispatch,
+            source: params.source,
+            cursor: params.cursor,
+            limit: params.limit
+          })
+        }
         const server = resolvePinnedFederatedServer(runtime, federated)
         try {
           const remote = (await runtime.callOrchestrationWorkerServer(

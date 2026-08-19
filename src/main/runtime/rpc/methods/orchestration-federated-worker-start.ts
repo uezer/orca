@@ -21,7 +21,8 @@ import {
   type OrchestrationWorkerLaunchReceipt
 } from './orchestration-worker-launch-preferences'
 import { validateFederatedWorkerStartPlacement } from './orchestration-worker-start-validation'
-
+import { recordFederatedWorkerTerminalResource } from './orchestration-federated-worker-resource'
+import type { RemoteStartReceipt } from './orchestration-federated-worker-start-types'
 export async function startFederatedWorker(args: {
   params: WorkerStartInput
   runtime: OrcaRuntimeService
@@ -57,7 +58,6 @@ export async function startFederatedWorker(args: {
     model: params.model,
     effort: params.effort
   })
-
   const server = runtime.resolveOrchestrationWorkerServer(params.on as string)
   const status = (await runtime.callOrchestrationWorkerServer(
     server.environmentId,
@@ -94,7 +94,6 @@ export async function startFederatedWorker(args: {
       : supportsControlMail
         ? ORCHESTRATION_FEDERATION_CONTROL_MAIL_PROTOCOL_VERSION
         : 1
-
   const setupDecision = createsWorktree ? (params.setup ?? 'run') : 'not_applicable'
   const started = db.createStartingWorkerDispatch({
     taskId: task.id,
@@ -169,13 +168,21 @@ export async function startFederatedWorker(args: {
       requestedLaunch,
       remote.state === 'ready'
     )
-    if (remote.state === 'ready' && remote.worktreeId && remote.terminalHandle) {
+    if (remote.worktreeId && remote.terminalHandle) {
       db.updateFederatedDispatchResources({
         dispatchId: started.dispatch.id,
         remoteRuntimeEpoch: remote.runtimeEpoch,
         worktreeId: remote.worktreeId,
         terminalHandle: remote.terminalHandle
       })
+      recordFederatedWorkerTerminalResource({
+        db,
+        dispatchId: started.dispatch.id,
+        hostScope: server.environmentId,
+        remote
+      })
+    }
+    if (remote.state === 'ready' && remote.worktreeId && remote.terminalHandle) {
       db.recordWorkerStage({
         dispatchId: started.dispatch.id,
         stage: 'remote_input_accepted',
@@ -250,21 +257,6 @@ export async function startFederatedWorker(args: {
     return federatedUnknownReceipt(worker, task.id, server.name, requestedLaunch)
   }
 }
-
-type RemoteStartReceipt = {
-  dispatchId: string
-  state: string
-  runtimeEpoch: string
-  worktreeId?: string
-  terminalHandle?: string
-  setup?: { state: string }
-  launch?: OrchestrationWorkerLaunchReceipt
-  effects?: unknown[]
-  residualResources?: unknown[]
-  failedStage?: string
-  lastError?: string
-}
-
 function isKnownRemoteStartFailure(code: string): boolean {
   return [
     'invalid_argument',
@@ -274,7 +266,6 @@ function isKnownRemoteStartFailure(code: string): boolean {
     'capability_unsupported'
   ].includes(code)
 }
-
 function federatedUnknownReceipt(
   worker: { dispatch_id: string; state: string; stage: string; last_error: string | null },
   taskId: string,

@@ -12,6 +12,9 @@ export function reconcileFederatedWorkerStart(
     lastError?: string | null
     worktreeId?: string | null
     terminalHandle?: string | null
+    paneKey?: string | null
+    processIncarnation?: string | null
+    hostScope?: string | null
     setupState?: string
     effects?: unknown[]
     residualResources?: unknown[]
@@ -30,6 +33,34 @@ export function reconcileFederatedWorkerStart(
     if (!['starting', 'start_unknown'].includes(worker.state)) {
       this.db.exec('COMMIT')
       return worker
+    }
+
+    if (
+      params.worktreeId &&
+      params.terminalHandle &&
+      params.paneKey &&
+      params.processIncarnation &&
+      !this.getWorkerTerminalResourceByOwner(params.dispatchId)
+    ) {
+      const effects = params.effects ?? []
+      const owned = effects.some(
+        (effect) =>
+          Boolean(effect) &&
+          typeof effect === 'object' &&
+          (effect as { kind?: string }).kind === 'terminal' &&
+          ['created', 'reused_agent_terminal'].includes(
+            (effect as { action?: string }).action ?? ''
+          )
+      )
+      this.createWorkerTerminalResourceStatement({
+        dispatchId: params.dispatchId,
+        worktreeId: params.worktreeId,
+        terminalHandle: params.terminalHandle,
+        paneKey: params.paneKey,
+        processIncarnation: params.processIncarnation,
+        hostScope: params.hostScope,
+        ownership: owned ? 'owned' : 'external'
+      })
     }
 
     if (params.state === 'ready') {

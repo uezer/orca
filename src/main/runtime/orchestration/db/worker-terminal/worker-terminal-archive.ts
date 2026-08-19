@@ -49,7 +49,7 @@ export function commitWorkerTerminalArchiveForRelease(
     if (
       resource.owner_dispatch_id === params.dispatchId &&
       resource.ownership_state === 'owned' &&
-      resource.release_state === 'requested'
+      ['requested', 'releasing', 'unknown'].includes(resource.release_state)
     ) {
       if (params.kind && params.content !== undefined) {
         this.storeWorkerTerminalArchive({
@@ -72,7 +72,7 @@ export function commitWorkerTerminalArchiveForRelease(
            SET release_state = 'releasing', archive_source = ?, archive_status = ?,
                updated_at = datetime('now')
            WHERE id = ? AND owner_dispatch_id = ? AND ownership_state = 'owned'
-             AND release_state = 'requested'`
+             AND release_state IN ('requested', 'releasing', 'unknown')`
         )
         .run(params.archiveSource, params.archiveStatus, params.resourceId, params.dispatchId)
     }
@@ -83,6 +83,20 @@ export function commitWorkerTerminalArchiveForRelease(
     this.db.exec('ROLLBACK')
     throw error
   }
+}
+
+export function commitFederatedWorkerTerminalRelease(
+  this: OrchestrationDb,
+  resourceId: string
+): WorkerTerminalResourceRow {
+  this.db
+    .prepare(
+      `UPDATE worker_terminal_resources
+       SET release_state = 'releasing', updated_at = datetime('now')
+       WHERE id = ? AND ownership_state = 'owned' AND release_state = 'requested'`
+    )
+    .run(resourceId)
+  return this.getWorkerTerminalResource(resourceId) as WorkerTerminalResourceRow
 }
 
 export function getWorkerTerminalArchive(
@@ -195,6 +209,7 @@ export function retainWorkerTerminalResource(
 export type WorkerTerminalArchiveMethods = {
   storeWorkerTerminalArchive: typeof storeWorkerTerminalArchive
   commitWorkerTerminalArchiveForRelease: typeof commitWorkerTerminalArchiveForRelease
+  commitFederatedWorkerTerminalRelease: typeof commitFederatedWorkerTerminalRelease
   getWorkerTerminalArchive: typeof getWorkerTerminalArchive
   settleWorkerTerminalRelease: typeof settleWorkerTerminalRelease
   markWorkerTerminalReleaseUnknown: typeof markWorkerTerminalReleaseUnknown
@@ -206,6 +221,7 @@ export function attachWorkerTerminalArchive(ctor: { prototype: object }): void {
   Object.assign(ctor.prototype, {
     storeWorkerTerminalArchive,
     commitWorkerTerminalArchiveForRelease,
+    commitFederatedWorkerTerminalRelease,
     getWorkerTerminalArchive,
     settleWorkerTerminalRelease,
     markWorkerTerminalReleaseUnknown,

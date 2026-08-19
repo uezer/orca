@@ -204,6 +204,15 @@ export type RemoteDispatchAttachmentRow = {
   setup_state: string
   effects: string
   residual_resources: string
+  release_state?: string
+  archive_kind?: string | null
+  archive_content?: string | null
+  archive_source?: string | null
+  archive_status?: string | null
+  release_error?: string | null
+  release_request_id?: string | null
+  release_requested_at?: string | null
+  release_completed_at?: string | null
   to_worker_imported_sequence: number
   last_error: string | null
   created_at: string

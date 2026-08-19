@@ -294,6 +294,54 @@ describe('durable orchestration mutation ledger', () => {
     db.close()
   })
 
+  it('resumes a pending federated release after restart', async () => {
+    const db = new OrchestrationDb(':memory:')
+    const runtime = new OrcaRuntimeService()
+    runtime.setOrchestrationDb(db)
+    const params = { dispatchId: 'ctx_remote_release' }
+    const callerFingerprint = db.getOrCreateLocalMutationCallerFingerprint()
+    const payloadHash = createHash('sha256')
+      .update(JSON.stringify({ method: 'orchestration.federationRelease', params }))
+      .digest('hex')
+    db.beginMutationReceipt({
+      callerFingerprint,
+      requestId: 'mutation_remote_release',
+      method: 'orchestration.federationRelease',
+      payloadHash
+    })
+    const effect = vi.fn().mockReturnValue({ state: 'release_pending' })
+    const dispatcher = new RpcDispatcher({
+      runtime,
+      methods: [
+        defineMethod({
+          name: 'orchestration.federationRelease',
+          params: z.object({ dispatchId: z.string() }),
+          handler: effect
+        })
+      ]
+    })
+
+    const result = await dispatcher.dispatch({
+      id: 'rpc_remote_release_retry',
+      authToken: 'caller-token',
+      method: 'orchestration.federationRelease',
+      params,
+      orchestrationContractVersion: ORCHESTRATION_CONTRACT_VERSION,
+      orchestrationRequestId: 'mutation_remote_release'
+    })
+
+    expect(result).toMatchObject({
+      ok: true,
+      result: {
+        state: 'release_pending',
+        mutation: { requestId: 'mutation_remote_release', replayed: true }
+      }
+    })
+    expect(effect).toHaveBeenCalledOnce()
+    expect(db.getMutationReceipt(callerFingerprint, 'mutation_remote_release')).toBeUndefined()
+    db.close()
+  })
+
   it('returns the accepted Dispatch when worker-start was interrupted by restart', async () => {
     const db = new OrchestrationDb(':memory:')
     const runtime = new OrcaRuntimeService()

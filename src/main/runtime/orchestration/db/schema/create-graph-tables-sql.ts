@@ -41,6 +41,16 @@ CREATE TABLE IF NOT EXISTS remote_dispatch_attachments (
   setup_state             TEXT NOT NULL DEFAULT 'not_applicable',
   effects                 TEXT NOT NULL DEFAULT '[]',
   residual_resources      TEXT NOT NULL DEFAULT '[]',
+  release_state           TEXT NOT NULL DEFAULT 'not_requested'
+    CHECK(release_state IN ('not_requested', 'retained', 'requested', 'releasing', 'released', 'unknown')),
+  archive_kind            TEXT,
+  archive_content         TEXT,
+  archive_source          TEXT,
+  archive_status          TEXT,
+  release_error           TEXT,
+  release_request_id      TEXT,
+  release_requested_at   TEXT,
+  release_completed_at   TEXT,
   to_worker_imported_sequence INTEGER NOT NULL DEFAULT 0,
   last_error              TEXT,
   created_at              TEXT NOT NULL DEFAULT (datetime('now')),
@@ -53,7 +63,6 @@ CREATE INDEX IF NOT EXISTS idx_remote_dispatch_attachments_active_pane
 CREATE INDEX IF NOT EXISTS idx_remote_dispatch_attachments_active_pane_suffix
   ON remote_dispatch_attachments(${REMOTE_ATTACHMENT_PANE_KEY_MATCH_SUFFIX_SQL})
   WHERE state IN ('starting', 'ready') AND pane_key IS NOT NULL;
-
 CREATE TABLE IF NOT EXISTS federation_relay_items (
   dispatch_id   TEXT NOT NULL,
   direction     TEXT NOT NULL CHECK(direction IN ('to_home', 'to_worker')),

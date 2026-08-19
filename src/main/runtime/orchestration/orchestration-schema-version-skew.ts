@@ -26,7 +26,17 @@ const POST_V6_COLUMNS = [
 ] as const
 
 const VERSIONED_POST_V6_COLUMNS = [
-  { version: 27, table: 'federated_dispatches', column: 'to_home_acknowledged_sequence' }
+  { version: 27, table: 'federated_dispatches', column: 'to_home_acknowledged_sequence' },
+  { version: 29, table: 'dispatch_contexts', column: 'termination_reason' },
+  { version: 30, table: 'remote_dispatch_attachments', column: 'release_state' },
+  { version: 30, table: 'remote_dispatch_attachments', column: 'archive_kind' },
+  { version: 30, table: 'remote_dispatch_attachments', column: 'archive_content' },
+  { version: 30, table: 'remote_dispatch_attachments', column: 'archive_source' },
+  { version: 30, table: 'remote_dispatch_attachments', column: 'archive_status' },
+  { version: 30, table: 'remote_dispatch_attachments', column: 'release_error' },
+  { version: 30, table: 'remote_dispatch_attachments', column: 'release_request_id' },
+  { version: 30, table: 'remote_dispatch_attachments', column: 'release_requested_at' },
+  { version: 30, table: 'remote_dispatch_attachments', column: 'release_completed_at' }
 ] as const
 
 const POST_V6_INDEXES = [
@@ -41,6 +51,10 @@ const POST_V6_INDEXES = [
   'idx_questions_dispatch_status',
   'idx_federation_relay_pending',
   'idx_remote_questions_dispatch_status'
+] as const
+
+const VERSIONED_POST_V6_INDEXES = [
+  { version: 30, index: 'idx_remote_dispatch_attachments_unreleased_process' }
 ] as const
 
 function hasOrchestrationColumn(db: Database.Database, table: string, column: string): boolean {
@@ -94,6 +108,9 @@ function hasCompletePostV6Schema(db: Database.Database, storedVersion: number): 
         storedVersion < version || hasOrchestrationColumn(db, table, column)
     ) &&
     POST_V6_INDEXES.every((index) => hasOrchestrationIndex(db, index)) &&
+    VERSIONED_POST_V6_INDEXES.every(
+      ({ version, index }) => storedVersion < version || hasOrchestrationIndex(db, index)
+    ) &&
     messagesAllowQuestions(db) &&
     hasConsistentLegacyAdoption(db)
   )

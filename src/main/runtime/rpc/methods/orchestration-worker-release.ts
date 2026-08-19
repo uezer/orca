@@ -8,6 +8,7 @@ import {
   exposeWorkerTerminalResource,
   type WorkerReleaseReceipt
 } from './orchestration-worker-release-completion'
+import { completeFederatedWorkerTerminalRelease } from './orchestration-federated-worker-release'
 
 const WorkerDispatchParams = z.object({ dispatch: requiredString('Missing --dispatch') })
 
@@ -31,18 +32,6 @@ export const ORCHESTRATION_WORKER_RELEASE_METHODS: RpcMethod[] = [
     params: WorkerDispatchParams,
     handler: async (params, { runtime }): Promise<WorkerReleaseReceipt> => {
       const db = runtime.getOrchestrationDb()
-      if (db.getFederatedDispatch(params.dispatch)) {
-        // Fail closed: the worker server owns that terminal; a home-side close would be a guess.
-        return {
-          dispatchId: params.dispatch,
-          state: 'retained',
-          reason: 'federation_unsupported',
-          processAction: 'none',
-          archive: null,
-          recovery:
-            'Connected-server workers do not support release yet; inspect the worker server directly.'
-        }
-      }
       const requested = db.requestWorkerTerminalRelease(params.dispatch)
       if (requested.disposition === 'already_released') {
         return {
@@ -84,6 +73,14 @@ export const ORCHESTRATION_WORKER_RELEASE_METHODS: RpcMethod[] = [
           processAction: 'none',
           archive: archiveSummary(resource)
         }
+      }
+      if (db.getFederatedDispatch(params.dispatch)) {
+        return completeFederatedWorkerTerminalRelease({
+          runtime,
+          db,
+          dispatchId: params.dispatch,
+          resource: requested.resource
+        })
       }
       return completeWorkerTerminalRelease({
         runtime,
@@ -171,8 +168,13 @@ export const ORCHESTRATION_WORKER_RELEASE_METHODS: RpcMethod[] = [
     params: z.object({ paneKey: requiredString('Missing paneKey') }),
     // Real user keystrokes durably relinquish orchestration ownership on the owning runtime, so
     // restarts, SSH drops, remote viewing, and renderer remounts cannot erase the takeover.
-    handler: (params, { runtime }) => ({
-      changed: runtime.getOrchestrationDb().markWorkerTerminalUserOwned(params.paneKey)
-    })
+    handler: (params, { runtime }) => {
+      const db = runtime.getOrchestrationDb()
+      return {
+        changed:
+          db.markWorkerTerminalUserOwned(params.paneKey) +
+          db.markRemoteAttachmentUserOwned(params.paneKey)
+      }
+    }
   })
 ]

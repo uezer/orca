@@ -17,50 +17,96 @@ export function prepareRemoteAttachmentAuthority(
     effects: unknown[]
   }
 ): string {
-  const attachment = this.getRemoteDispatchAttachment(params.dispatchId)
-  if (!attachment || attachment.state !== 'starting') {
-    throw new OrchestrationError(
-      'dispatch_inactive',
-      `Remote Dispatch ${params.dispatchId} is not starting.`
-    )
-  }
-  const capability = `dcap_${randomBytes(32).toString('base64url')}`
-  const result = this.db
-    .prepare(
-      `UPDATE remote_dispatch_attachments
-       SET stage = 'authority_attached', capability_hash = ?, pane_key = ?,
-           process_incarnation = ?, worktree_id = ?, terminal_handle = ?, setup_state = ?,
-           effects = ?, residual_resources = ?, updated_at = datetime('now')
-       WHERE dispatch_id = ? AND state = 'starting'`
-    )
-    .run(
-      hashDispatchCapability(capability),
-      params.paneKey,
-      params.processIncarnation,
-      params.worktreeId,
-      params.terminalHandle,
-      params.setupState,
-      JSON.stringify(params.effects),
-      JSON.stringify(
-        params.effects.filter((effect) =>
-          Boolean(
-            effect &&
-            typeof effect === 'object' &&
-            ((effect as { action?: string }).action?.startsWith('created') ||
-              (effect as { action?: string }).action === 'reused_agent_terminal')
+  this.db.exec('BEGIN IMMEDIATE')
+  try {
+    const attachment = this.getRemoteDispatchAttachment(params.dispatchId)
+    if (!attachment || attachment.state !== 'starting') {
+      throw new OrchestrationError(
+        'dispatch_inactive',
+        `Remote Dispatch ${params.dispatchId} is not starting.`
+      )
+    }
+    assertRemoteAttachmentLeaseAvailable.call(this, params)
+    const capability = `dcap_${randomBytes(32).toString('base64url')}`
+    const result = this.db
+      .prepare(
+        `UPDATE remote_dispatch_attachments
+         SET stage = 'authority_attached', capability_hash = ?, pane_key = ?,
+             process_incarnation = ?, worktree_id = ?, terminal_handle = ?, setup_state = ?,
+             effects = ?, residual_resources = ?, updated_at = datetime('now')
+         WHERE dispatch_id = ? AND state = 'starting'`
+      )
+      .run(
+        hashDispatchCapability(capability),
+        params.paneKey,
+        params.processIncarnation,
+        params.worktreeId,
+        params.terminalHandle,
+        params.setupState,
+        JSON.stringify(params.effects),
+        JSON.stringify(
+          params.effects.filter((effect) =>
+            Boolean(
+              effect &&
+              typeof effect === 'object' &&
+              ((effect as { action?: string }).action?.startsWith('created') ||
+                (effect as { action?: string }).action === 'reused_agent_terminal')
+            )
           )
-        )
-      ),
-      params.dispatchId
+        ),
+        params.dispatchId
+      )
+    if (result.changes !== 1) {
+      throw new OrchestrationError(
+        'dispatch_inactive',
+        `Remote Dispatch ${params.dispatchId} is not starting.`
+      )
+    }
+    this.db.exec('COMMIT')
+    return capability
+  } catch (error) {
+    this.db.exec('ROLLBACK')
+    throw error
+  }
+}
+
+function assertRemoteAttachmentLeaseAvailable(
+  this: OrchestrationDb,
+  params: {
+    dispatchId: string
+    paneKey: string
+    processIncarnation: string
+    terminalHandle: string
+  }
+): void {
+  const candidates = this.db
+    .prepare(
+      `SELECT dispatch_id, pane_key, release_state FROM remote_dispatch_attachments
+       WHERE dispatch_id != ? AND process_incarnation = ? AND release_state != 'released'`
     )
-  // Why: without this the caller keeps a capability whose hash was never stored, surfacing later as an authority mismatch.
-  if (result.changes !== 1) {
+    .all(params.dispatchId, params.processIncarnation) as Pick<
+    RemoteDispatchAttachmentRow,
+    'dispatch_id' | 'pane_key' | 'release_state'
+  >[]
+  const exact = candidates.filter(
+    (candidate) => candidate.pane_key && isEquivalentPaneKey(candidate.pane_key, params.paneKey)
+  )
+  if (
+    exact.some((candidate) =>
+      ['requested', 'releasing', 'unknown'].includes(candidate.release_state ?? '')
+    )
+  ) {
     throw new OrchestrationError(
-      'dispatch_inactive',
-      `Remote Dispatch ${params.dispatchId} is not starting.`
+      'terminal_release_in_progress',
+      `Terminal ${params.terminalHandle} has a release in progress.`
     )
   }
-  return capability
+  if (exact.length > 0) {
+    throw new OrchestrationError(
+      'terminal_owned',
+      `Terminal ${params.terminalHandle} is owned by another remote Dispatch.`
+    )
+  }
 }
 
 export function markRemoteAttachmentReady(
@@ -145,13 +191,58 @@ export function isRemoteAttachmentProcessCurrent(
   }
 ): boolean {
   const attachment = this.getRemoteDispatchAttachment(params.dispatchId)
-  return Boolean(
+  const identityMatches = Boolean(
     attachment?.pane_key &&
     params.paneKey &&
     isEquivalentPaneKey(attachment.pane_key, params.paneKey) &&
     attachment.process_incarnation &&
     attachment.process_incarnation === params.processIncarnation
   )
+  if (!identityMatches || !attachment?.pane_key || !attachment.process_incarnation) {
+    return false
+  }
+  const candidates = this.db
+    .prepare(
+      `SELECT pane_key FROM remote_dispatch_attachments
+       WHERE dispatch_id != ? AND process_incarnation = ? AND release_state != 'released'`
+    )
+    .all(params.dispatchId, attachment.process_incarnation) as { pane_key: string | null }[]
+  return !candidates.some(
+    (candidate) =>
+      candidate.pane_key && isEquivalentPaneKey(candidate.pane_key, attachment.pane_key as string)
+  )
+}
+
+export function markRemoteAttachmentUserOwned(this: OrchestrationDb, paneKey: string): number {
+  this.db.exec('BEGIN IMMEDIATE')
+  try {
+    const candidates = this.db
+      .prepare(
+        `SELECT dispatch_id, pane_key FROM remote_dispatch_attachments
+         WHERE pane_key IS NOT NULL AND state != 'stopping'
+           AND release_state IN ('not_requested', 'retained', 'requested')`
+      )
+      .all() as { dispatch_id: string; pane_key: string }[]
+    const update = this.db.prepare(
+      `UPDATE remote_dispatch_attachments
+       SET release_state = 'retained', release_error = 'user_takeover',
+           archive_kind = NULL, archive_content = NULL, archive_source = NULL,
+           archive_status = NULL, updated_at = datetime('now')
+       WHERE dispatch_id = ? AND state != 'stopping'
+         AND release_state IN ('not_requested', 'retained', 'requested')`
+    )
+    let changed = 0
+    for (const candidate of candidates) {
+      if (isEquivalentPaneKey(candidate.pane_key, paneKey)) {
+        changed += Number(update.run(candidate.dispatch_id).changes)
+      }
+    }
+    this.db.exec('COMMIT')
+    return changed
+  } catch (error) {
+    this.db.exec('ROLLBACK')
+    throw error
+  }
 }
 
 export type RemoteDispatchAttachmentAuthorityMethods = {
@@ -160,6 +251,7 @@ export type RemoteDispatchAttachmentAuthorityMethods = {
   failRemoteAttachment: typeof failRemoteAttachment
   verifyRemoteAttachmentAuthority: typeof verifyRemoteAttachmentAuthority
   isRemoteAttachmentProcessCurrent: typeof isRemoteAttachmentProcessCurrent
+  markRemoteAttachmentUserOwned: typeof markRemoteAttachmentUserOwned
 }
 
 export function attachRemoteDispatchAttachmentAuthority(ctor: { prototype: object }): void {
@@ -168,6 +260,7 @@ export function attachRemoteDispatchAttachmentAuthority(ctor: { prototype: objec
     markRemoteAttachmentReady,
     failRemoteAttachment,
     verifyRemoteAttachmentAuthority,
-    isRemoteAttachmentProcessCurrent
+    isRemoteAttachmentProcessCurrent,
+    markRemoteAttachmentUserOwned
   })
 }

@@ -8,6 +8,7 @@ import { defineMethod, type RpcMethod } from '../core'
 import { OptionalFiniteNumber, requiredString } from '../schemas'
 import { readExactWorkerOutput } from './orchestration-worker-output'
 import { describeUnconfirmedAgentStop } from '../../../../shared/pty-liveness-verdict'
+import { ORCHESTRATION_FEDERATION_RELEASE_METHODS } from './orchestration-federation-release-control'
 
 const FederationDispatchParams = z.object({
   dispatchId: requiredString('Missing Dispatch ID')
@@ -62,13 +63,21 @@ export const ORCHESTRATION_FEDERATION_CONTROL_METHODS: RpcMethod[] = [
           `Remote Dispatch ${params.dispatchId} no longer resolves to its exact process.`
         )
       }
+      const terminal = await runtime.readTerminal(observation.terminal.handle, {
+        cursor: params.cursor,
+        limit: params.limit
+      })
+      const afterRead = await inspectRemoteAttachment(runtime, params.dispatchId)
+      if (!afterRead.exact) {
+        throw new OrchestrationError(
+          'worker_identity_changed',
+          `Remote Dispatch ${params.dispatchId} changed process while output was read.`
+        )
+      }
       return {
         dispatchId: params.dispatchId,
         runtimeEpoch: runtime.getRuntimeId(),
-        terminal: await runtime.readTerminal(observation.terminal.handle, {
-          cursor: params.cursor,
-          limit: params.limit
-        })
+        terminal
       }
     }
   }),
@@ -191,7 +200,8 @@ export const ORCHESTRATION_FEDERATION_CONTROL_METHODS: RpcMethod[] = [
         }
       }
     }
-  })
+  }),
+  ...ORCHESTRATION_FEDERATION_RELEASE_METHODS
 ]
 
 function requireHomeAttachment(

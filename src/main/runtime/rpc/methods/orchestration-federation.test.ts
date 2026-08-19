@@ -294,6 +294,13 @@ describe('orchestration federation', () => {
       }
     })
     expect(homeDb.getTask(task.id)?.status).toBe('failed')
+    const dispatch = homeDb.getDispatchContext(task.id)!
+    expect(homeDb.getWorkerTerminalResourceByOwner(dispatch.id)).toMatchObject({
+      terminal_handle: 'term_windows_worker',
+      pane_key: 'tab_worker:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      process_incarnation: 'windows_runtime:pty:1',
+      ownership_state: 'owned'
+    })
     expect(workerRuntime.sendTerminalAgentPrompt).not.toHaveBeenCalled()
   })
 

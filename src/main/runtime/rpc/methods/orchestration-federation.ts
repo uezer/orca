@@ -194,6 +194,20 @@ export const ORCHESTRATION_FEDERATION_ATTACH_METHODS: RpcMethod[] = [
           throw new Error('Setup terminal failed to start before the gated agent launch.')
         }
         persistFederatedReadinessStage(setupStage)
+        const paneKey = runtime.getTerminalPaneKey(terminalHandle)
+        const processIncarnation = runtime.getTerminalProcessIncarnation(terminalHandle)
+        if (!paneKey || !processIncarnation) {
+          throw new Error('stable_pane_required')
+        }
+        const capability = db.prepareRemoteAttachmentAuthority({
+          dispatchId: params.dispatchId,
+          paneKey,
+          processIncarnation,
+          worktreeId: worktree.id,
+          terminalHandle,
+          setupState: setup.state,
+          effects
+        })
         failedStage = 'agent_readiness'
         const wait = await runtime.waitForTerminal(terminalHandle, {
           condition: 'tui-idle',
@@ -210,20 +224,6 @@ export const ORCHESTRATION_FEDERATION_ATTACH_METHODS: RpcMethod[] = [
               : `Agent did not become ready (${wait.status}).`
           )
         }
-        const paneKey = runtime.getTerminalPaneKey(terminalHandle)
-        const processIncarnation = runtime.getTerminalProcessIncarnation(terminalHandle)
-        if (!paneKey || !processIncarnation) {
-          throw new Error('stable_pane_required')
-        }
-        const capability = db.prepareRemoteAttachmentAuthority({
-          dispatchId: params.dispatchId,
-          paneKey,
-          processIncarnation,
-          worktreeId: worktree.id,
-          terminalHandle,
-          setupState: setup.state,
-          effects
-        })
         failedStage = 'dispatch_input'
         await runtime.sendTerminalAgentPrompt(
           terminalHandle,
@@ -253,6 +253,8 @@ export const ORCHESTRATION_FEDERATION_ATTACH_METHODS: RpcMethod[] = [
           runtimeEpoch: runtime.getRuntimeId(),
           worktreeId: worktree.id,
           terminalHandle,
+          paneKey,
+          processIncarnation,
           setup,
           launch: launch.receipt,
           effects,
