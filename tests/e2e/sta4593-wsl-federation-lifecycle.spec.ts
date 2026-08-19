@@ -17,6 +17,7 @@ const remoteClientProfile = mkdtempSync(path.join(os.tmpdir(), 'sta4593-remote-c
 const remoteLedgerPath = path.join(os.tmpdir(), 'sta4593-codex.jsonl')
 const remoteWorktreePath =
   process.env.STA4593_REMOTE_WORKTREE_PATH ?? '/home/orca/sta4593-workspace'
+const coordinatorMode = process.env.STA4593_COORDINATOR_MODE === 'headless' ? 'headless' : 'headful'
 
 type StartedWorker = {
   dispatchId: string
@@ -171,7 +172,7 @@ test.afterAll(() => {
   rmSync(remoteClientProfile, { recursive: true, force: true })
 })
 
-test('proves STA-4593 A/B/C across headed Windows and isolated WSL @headful', async ({
+test(`proves STA-4593 A/B/C across ${coordinatorMode} Windows and isolated WSL ${coordinatorMode === 'headful' ? '@headful' : '@headless'}`, async ({
   electronApp,
   orcaPage
 }) => {

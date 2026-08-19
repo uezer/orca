@@ -10493,7 +10493,7 @@
       "providers": ["local", "daemon", "ssh", "wsl", "remote-runtime"],
       "coveredPlatforms": ["macos", "windows"],
       "coveredProviders": ["local", "ssh", "wsl", "remote-runtime"],
-      "coverageNotes": "Deterministic service tests cover release-versus-reuse ordering, transactional retain and takeover cancellation, exact host/pane/process identity, dead external/user-owned/transferred/stopped/abandoned reconciliation, conservative unknown provider and legacy metadata handling, immutable transcript and bounded terminal archives, mutation restart, reset cleanup, replay idempotency, federated capability fallback, lost-response recovery, and 50-resource accounting. A macOS Electron journey invokes the freshly compiled worker-release CLI after the worker process disappears. A physical headed Windows journey pairs to an isolated packaged WSL runtime and proves lifecycle settlement, bounded final output before PTY retirement, unrelated-PTY isolation, and safe old-host retention. A current/current service transport proves exact remote archive-before-close and idempotent release; live current/current WSL release remains an explicit gap.",
+      "coverageNotes": "Deterministic service tests cover release-versus-reuse ordering, transactional retain and takeover cancellation, exact host/pane/process identity, dead external/user-owned/transferred/stopped/abandoned reconciliation, conservative unknown provider and legacy metadata handling, immutable transcript and bounded terminal archives, mutation restart, reset cleanup, replay idempotency, federated capability fallback, lost-response recovery, and 50-resource accounting. A macOS Electron journey invokes the freshly compiled worker-release CLI after the worker process disappears. Physical headed and hidden Windows current-main journeys pair to an isolated current-main WSL authority and prove lifecycle settlement, final stdout/stderr plus exit metadata after PTY retirement, archive retention, idempotent retain/release/stop, and unrelated-PTY isolation. A packaged 1.4.184 WSL journey preserves safe old-host retention.",
       "motivatingLinks": [
         "https://github.com/stablyai/orca/pull/12355",
         "https://github.com/stablyai/orca/issues/13860",
@@ -10510,7 +10510,8 @@
         "pnpm exec vitest run --config config/vitest.config.ts tests/e2e/completed-worker-retirement-resume.unit.test.ts --reporter=verbose",
         "pnpm run build:cli && SKIP_BUILD=1 pnpm exec playwright test tests/e2e/orchestration-worker-settlement-release-cli.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1",
         "pnpm exec vitest run --config config/vitest.config.ts src/main/runtime/rpc/methods/orchestration-federated-worker-release.test.ts --reporter=dot",
-        "SKIP_BUILD=1 STA4593_PAIRING_CODE_PATH=<isolated-pairing-code> pnpm exec playwright test tests/e2e/sta4593-wsl-federation-lifecycle.spec.ts --config tests/playwright.config.ts --project electron-headful --workers=1"
+        "SKIP_BUILD=1 STA4593_PAIRING_CODE_PATH=<isolated-pairing-code> pnpm exec playwright test tests/e2e/sta4593-wsl-federation-lifecycle.spec.ts --config tests/playwright.config.ts --project electron-headful --workers=1",
+        "SKIP_BUILD=1 STA4593_COORDINATOR_MODE=headless STA4593_PAIRING_CODE_PATH=<isolated-pairing-code> pnpm exec playwright test tests/e2e/sta4593-wsl-federation-lifecycle.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1"
       ],
       "testFiles": [
         "src/main/runtime/orca-runtime-process-incarnation-liveness.test.ts",
@@ -10579,8 +10580,8 @@
           "file": "tests/e2e/sta4593-wsl-federation-lifecycle.spec.ts",
           "assertions": [
             "a Windows-owned Task settles exactly once from its WSL worker capability",
-            "final stdout and stderr are readable after agent exit and classified after PTY retirement",
-            "release and stop never touch the unrelated WSL control PTY"
+            "final stdout, stderr, exit code, command, and nonzero cursors remain readable after PTY retirement and through release archive",
+            "retain, release, and stop settle idempotently without touching the unrelated WSL control PTY"
           ]
         },
         {
@@ -10594,6 +10595,24 @@
         }
       ],
       "evidenceRuns": [
+        {
+          "date": "2026-08-18",
+          "runner": "manual",
+          "platform": "windows",
+          "command": "SKIP_BUILD=1 STA4593_PAIRING_CODE_PATH=<isolated-pairing-code> pnpm exec playwright test tests/e2e/sta4593-wsl-federation-lifecycle.spec.ts --config tests/playwright.config.ts --project electron-headful --workers=1",
+          "result": "passed",
+          "durationSeconds": 50,
+          "summary": "Current Windows desktop to isolated current WSL passed A/B/C: exact remote pane/incarnation/capability and once-only settlement; retained final stdout/stderr, exit 23, command, and cursors after PTY exit and through archive; idempotent release/stop with an unrelated PTY left live."
+        },
+        {
+          "date": "2026-08-18",
+          "runner": "manual",
+          "platform": "windows",
+          "command": "SKIP_BUILD=1 STA4593_COORDINATOR_MODE=headless STA4593_PAIRING_CODE_PATH=<isolated-pairing-code> pnpm exec playwright test tests/e2e/sta4593-wsl-federation-lifecycle.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1",
+          "result": "passed",
+          "durationSeconds": 50,
+          "summary": "The same current/current A/B/C oracle passed with the Windows coordinator hidden against the isolated headless WSL authority."
+        },
         {
           "date": "2026-08-12",
           "runner": "local",
@@ -10623,8 +10642,8 @@
         }
       ],
       "runtimeBudget": {
-        "p95Seconds": 45,
-        "scope": "deterministic runtime, SQLite, transcript, renderer-input, mutation contracts, and one compiled-CLI Electron journey"
+        "p95Seconds": 60,
+        "scope": "deterministic runtime, SQLite, transcript, renderer-input, mutation contracts, one compiled-CLI Electron journey, and each live Windows-to-WSL oracle"
       },
       "flakeHistory": {
         "status": "unknown",
@@ -10640,14 +10659,12 @@
       },
       "promotionCriteria": [
         "Collect 100 consecutive focused CI passes or 14 days of soak history.",
-        "Add live headed and headless paired-runtime release/reuse journeys.",
         "Add Docker SSH reconnect and physical Windows WSL host-scope evidence.",
         "Prove provider-close lost acknowledgements converge with an exact durable close receipt."
       ],
       "knownGaps": [
         "Provider close has no durable cross-process operation receipt, so a crash after host mutation but before SQLite settlement remains release_pending until exact inventory returns.",
-        "A physical current/current Windows-to-WSL release is not exercised because the isolated WSL authority is packaged 1.4.184; the candidate path is covered by the same in-process transport and exact ownership state machine.",
-        "Mobile/direct remote input takeover and live Linux, SSH, headless paired-runtime release are not exercised; the current fix changes orchestration ownership and remote release state, not ConPTY, filesystem, update, sleep, firewall, or window lifecycle semantics."
+        "Mobile/direct remote input takeover and live Linux and SSH paired-runtime release are not exercised; the current fix changes orchestration ownership and remote release state, not ConPTY, filesystem, update, sleep, firewall, or window lifecycle semantics."
       ],
       "demotionRule": "Keep experimental or demote if release can overlap exact reuse, close a conflicting lease, lose immutable output, retain reset archives, fan out per worker, or any focused ordering test flakes without a product or harness defect."
     },
