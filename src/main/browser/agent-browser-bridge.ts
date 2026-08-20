@@ -1,11 +1,11 @@
 /* eslint-disable max-lines */
 import { execFile, type ChildProcess } from 'node:child_process'
-import { existsSync, accessSync, chmodSync, readFileSync, constants } from 'node:fs'
+import { existsSync, accessSync, chmodSync, constants } from 'node:fs'
 import { join } from 'node:path'
 import { platform, arch } from 'node:os'
 import { app, type WebContents } from 'electron'
 import { CdpWsProxy } from './cdp-ws-proxy'
-import { captureFullPageScreenshot } from './cdp-screenshot'
+import { captureFullPageScreenshot, captureViewportScreenshot } from './cdp-screenshot'
 import { acquireElectronDebugger } from './electron-debugger-lease'
 import type { BrowserManager } from './browser-manager'
 import { BrowserError } from './cdp-bridge'
@@ -1444,14 +1444,13 @@ export class AgentBrowserBridge {
     worktreeId?: string,
     browserPageId?: string
   ): Promise<BrowserScreenshotResult> {
-    // Why: agent-browser writes the screenshot to a temp file and returns its path; read it and return base64.
     return this.enqueueTargetedCommand(
       worktreeId,
       browserPageId,
-      async (sessionName) => {
-        return this.captureScreenshotCommand(sessionName, ['screenshot'], 300, format)
+      async (_sessionName, target) => {
+        return this.captureViewportScreenshotCommand(worktreeId, target, 300, format)
       },
-      { ensureVisible: false }
+      { ensureSession: false, ensureVisible: false }
     )
   }
 
@@ -1463,75 +1462,64 @@ export class AgentBrowserBridge {
     return this.enqueueTargetedCommand(
       worktreeId,
       browserPageId,
-      async (sessionName, target) => {
+      async (_sessionName, target) => {
         return this.captureFullPageScreenshotCommand(
-          sessionName,
-          target.webContentsId,
+          worktreeId,
+          target,
           500,
           format === 'jpeg' ? 'jpeg' : 'png'
         )
       },
-      { ensureVisible: false }
+      { ensureSession: false, ensureVisible: false }
     )
   }
 
-  private readScreenshotFromResult(raw: unknown, format?: string): BrowserScreenshotResult {
-    const parsed = raw as { path?: string } | undefined
-    if (!parsed?.path) {
-      throw new BrowserError('browser_error', 'Screenshot returned no file path')
-    }
-    if (!existsSync(parsed.path)) {
-      throw new BrowserError('browser_error', `Screenshot file not found: ${parsed.path}`)
-    }
-    const data = readFileSync(parsed.path).toString('base64')
-    return { data, format: format === 'jpeg' ? 'jpeg' : 'png' } as BrowserScreenshotResult
-  }
-
-  private async captureScreenshotCommand(
-    sessionName: string,
-    commandArgs: string[],
+  private async captureViewportScreenshotCommand(
+    worktreeId: string | undefined,
+    target: ResolvedBrowserCommandTarget,
     settleMs: number,
     format?: string
   ): Promise<BrowserScreenshotResult> {
     return this.withSerializedScreenshotAccess(async () => {
-      const session = this.sessions.get(sessionName)
-      const restore = session
-        ? await this.browserManager.acquireAutomationVisibility(session.webContentsId)
-        : () => {}
+      const restore = await this.browserManager.ensureWebviewVisible(target.webContentsId)
       try {
-        // Why: let the compositor settle to a painted frame after the lease, inside the screenshot lock so another tab can't change lease state first.
+        // Why: activating the guest lets Electron commit WebGL surfaces before capture.
         await new Promise((r) => setTimeout(r, settleMs))
-        const raw = await this.execAgentBrowser(sessionName, commandArgs)
-        return this.readScreenshotFromResult(raw, format)
+        const visibleTarget = this.resolveCommandTarget(worktreeId, target.browserPageId)
+        const wc = this.requireTargetWebContents(visibleTarget)
+        const result = await captureViewportScreenshot(wc, {
+          format: format === 'jpeg' ? 'jpeg' : 'png'
+        })
+        return {
+          data: result.data,
+          format: format === 'jpeg' ? 'jpeg' : 'png'
+        } as BrowserScreenshotResult
+      } catch (error) {
+        throw new BrowserError('browser_error', (error as Error).message)
       } finally {
-        restore()
+        await restore()
       }
     })
   }
 
   private async captureFullPageScreenshotCommand(
-    sessionName: string,
-    webContentsId: number,
+    worktreeId: string | undefined,
+    target: ResolvedBrowserCommandTarget,
     settleMs: number,
     format: 'png' | 'jpeg'
   ): Promise<BrowserScreenshotResult> {
     return this.withSerializedScreenshotAccess(async () => {
-      const session = this.sessions.get(sessionName)
-      const restore = session
-        ? await this.browserManager.acquireAutomationVisibility(session.webContentsId)
-        : () => {}
+      const restore = await this.browserManager.ensureWebviewVisible(target.webContentsId)
       try {
-        // Why: the guest compositor needs a beat to paint a fresh frame after becoming paintable, or CDP captures a stale surface.
+        // Why: full-page CDP capture needs the same foreground compositor commit.
         await new Promise((r) => setTimeout(r, settleMs))
-        const wc = this.getWebContents(webContentsId)
-        if (!wc) {
-          throw new BrowserError('browser_tab_not_found', 'Tab is no longer available')
-        }
+        const visibleTarget = this.resolveCommandTarget(worktreeId, target.browserPageId)
+        const wc = this.requireTargetWebContents(visibleTarget)
         return await captureFullPageScreenshot(wc, format)
       } catch (error) {
         throw new BrowserError('browser_error', (error as Error).message)
       } finally {
-        restore()
+        await restore()
       }
     })
   }
