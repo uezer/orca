@@ -122,6 +122,9 @@ describe('browserManager', () => {
     expect(activationScript).toContain('var browserPageId = "page-1";')
     expect(activationScript).toContain('state.setActiveBrowserTab(browserWorkspaceId);')
     expect(activationScript).toContain(
+      'state.activateTab(foundUnifiedTab.id, { worktreeId: targetWorktreeId });'
+    )
+    expect(activationScript).toContain(
       'state.setActiveBrowserPage(browserWorkspaceId, browserPageId);'
     )
     expect(activationScript).toContain('var targetWorktreeId = "wt-1";')
