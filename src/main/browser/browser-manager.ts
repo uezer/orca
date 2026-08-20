@@ -476,21 +476,21 @@ export class BrowserManager {
   }
 
   // Why: screenshots target page ids but visible chrome is keyed by workspace id; activate by workspace or the webview stays hidden and capture times out.
-  async ensureWebviewVisible(guestWebContentsId: number): Promise<() => Promise<void>> {
+  async ensureWebviewVisible(guestWebContentsId: number): Promise<() => void> {
     const browserPageId = this.resolveBrowserTabIdForGuestWebContentsId(guestWebContentsId)
     if (!browserPageId) {
-      return async () => {}
+      return () => {}
     }
     const browserWorkspaceId = this.workspaceIdByPageId.get(browserPageId) ?? browserPageId
     const worktreeId = this.worktreeIdByTabId.get(browserPageId) ?? null
     const renderer = this.resolveRendererForBrowserTab(browserPageId)
     if (!renderer || renderer.isDestroyed()) {
-      return async () => {}
+      return () => {}
     }
 
     const prev = await renderer
       .executeJavaScript(
-        `(async function() {
+        `(function() {
           var store = window.__store;
           if (!store) return null;
           var state = store.getState();
@@ -561,35 +561,30 @@ export class BrowserManager {
             }
           }
 
-          var foundUnifiedTab = null;
-          var allTabs = state.unifiedTabsByWorktree || {};
-          for (var unifiedWtId in allTabs) {
-            var unifiedTabs = allTabs[unifiedWtId] || [];
-            for (var unifiedIndex = 0; unifiedIndex < unifiedTabs.length; unifiedIndex++) {
-              if (
-                unifiedTabs[unifiedIndex].contentType === 'browser' &&
-                unifiedTabs[unifiedIndex].entityId === browserWorkspaceId
-              ) {
-                foundUnifiedTab = unifiedTabs[unifiedIndex];
-                break;
-              }
-            }
-            if (foundUnifiedTab) break;
-          }
-
           if (foundWorkspace) {
             if (typeof state.setActiveBrowserTab === 'function') {
               state.setActiveBrowserTab(browserWorkspaceId);
               state = store.getState();
-            } else if (typeof state.setActiveTabType === 'function') {
+            } else {
+              var allTabs = state.unifiedTabsByWorktree || {};
+              var found = null;
+              for (var unifiedWtId in allTabs) {
+                var unifiedTabs = allTabs[unifiedWtId] || [];
+                for (var unifiedIndex = 0; unifiedIndex < unifiedTabs.length; unifiedIndex++) {
+                  if (
+                    unifiedTabs[unifiedIndex].contentType === 'browser' &&
+                    unifiedTabs[unifiedIndex].entityId === browserWorkspaceId
+                  ) {
+                    found = unifiedTabs[unifiedIndex];
+                    break;
+                  }
+                }
+                if (found) break;
+              }
+              if (found) {
+                state.activateTab(found.id);
+              }
               state.setActiveTabType('browser');
-              state = store.getState();
-            }
-            // Why: setActiveBrowserTab updates browser selection but does not
-            // select the browser entry inside the unified tab group. A terminal
-            // can therefore remain mounted and leave the WebGL guest unpaintable.
-            if (foundUnifiedTab && typeof state.activateTab === 'function') {
-              state.activateTab(foundUnifiedTab.id, { worktreeId: targetWorktreeId });
               state = store.getState();
             }
             // Why: activating the workspace alone is not enough for screenshot
@@ -604,14 +599,6 @@ export class BrowserManager {
               state = store.getState();
             }
           }
-
-          // Why: React must commit the active pane before the guest compositor can paint.
-          await Promise.race([
-            new Promise(function(resolve) {
-              requestAnimationFrame(function() { requestAnimationFrame(resolve); });
-            }),
-            new Promise(function(resolve) { setTimeout(resolve, 1000); })
-          ]);
 
           return {
             prevTabType: prevTabType,
@@ -636,16 +623,16 @@ export class BrowserManager {
         prev.prevActiveBrowserPageId !== prev.targetBrowserPageId)
 
     if (!needsRestore) {
-      return async () => {}
+      return () => {}
     }
 
-    return async () => {
+    return () => {
       if (!prev || !renderer || renderer.isDestroyed()) {
         return
       }
-      await renderer
+      renderer
         .executeJavaScript(
-          `(async function() {
+          `(function() {
             var store = window.__store;
             if (!store) return;
             var state = store.getState();
@@ -693,12 +680,6 @@ export class BrowserManager {
             if (${JSON.stringify(prev?.prevTabType)} !== 'browser') {
               state.setActiveTabType(${JSON.stringify(prev?.prevTabType)});
             }
-            await Promise.race([
-              new Promise(function(resolve) {
-                requestAnimationFrame(function() { requestAnimationFrame(resolve); });
-              }),
-              new Promise(function(resolve) { setTimeout(resolve, 1000); })
-            ]);
           })()`
         )
         .catch(() => {})

@@ -122,15 +122,11 @@ describe('browserManager', () => {
     expect(activationScript).toContain('var browserPageId = "page-1";')
     expect(activationScript).toContain('state.setActiveBrowserTab(browserWorkspaceId);')
     expect(activationScript).toContain(
-      'state.activateTab(foundUnifiedTab.id, { worktreeId: targetWorktreeId });'
-    )
-    expect(activationScript).toContain(
       'state.setActiveBrowserPage(browserWorkspaceId, browserPageId);'
     )
     expect(activationScript).toContain('var targetWorktreeId = "wt-1";')
-    expect(activationScript).toContain('requestAnimationFrame')
 
-    await restore()
+    restore()
   })
 
   it('acquires renderer automation visibility without changing active browser state', async () => {
@@ -343,7 +339,7 @@ describe('browserManager', () => {
     })
 
     const restore = await browserManager.ensureWebviewVisible(guest.id)
-    await restore()
+    restore()
 
     const restoreScript = rendererExecuteJavaScriptMock.mock.calls[1]?.[0]
     expect(restoreScript).toContain('state.setActiveWorktree("wt-prev");')
@@ -400,7 +396,7 @@ describe('browserManager', () => {
     })
 
     const restore = await browserManager.ensureWebviewVisible(guest.id)
-    await restore()
+    restore()
 
     const restoreScript = rendererExecuteJavaScriptMock.mock.calls[1]?.[0]
     expect(restoreScript).toContain('state.setActiveBrowserPage(')
@@ -458,7 +454,7 @@ describe('browserManager', () => {
     })
 
     const restore = await browserManager.ensureWebviewVisible(guest.id)
-    await restore()
+    restore()
 
     const restoreScript = rendererExecuteJavaScriptMock.mock.calls[1]?.[0]
     expect(restoreScript).toContain('state.setActiveBrowserTab("workspace-prev");')
