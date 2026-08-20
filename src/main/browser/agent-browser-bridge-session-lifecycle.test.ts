@@ -79,7 +79,7 @@ describe('AgentBrowserBridge', () => {
     bridge.setActiveTab(100)
   })
 
-  it('fails closed when stale agent-browser session ownership cannot be reset', async () => {
+  it('uses an isolated helper session when a legacy daemon cannot be reset', async () => {
     vi.useFakeTimers()
     try {
       const closeKill = vi.fn()
@@ -97,23 +97,75 @@ describe('AgentBrowserBridge', () => {
       )
 
       const promise = bridge.snapshot()
-      const rejection = expect(promise).rejects.toMatchObject({
-        code: 'browser_owner_unavailable',
-        message:
-          'Could not reset stale helper session orca-tab-tab-1; retry after agent-browser exits'
-      })
 
       await vi.advanceTimersByTimeAsync(3_000)
 
-      await rejection
+      await expect(promise).resolves.toEqual({
+        browserPageId: 'tab-1',
+        snapshot: 'ready'
+      })
       expect(closeKill).toHaveBeenCalled()
-      expect(execFileMock.mock.calls.some((call) => call[1].includes('snapshot'))).toBe(false)
+      const snapshotArgs = execFileMock.mock.calls.find((call) =>
+        call[1].includes('snapshot')
+      )?.[1] as string[]
+      const helperSessionName = snapshotArgs[snapshotArgs.indexOf('--session') + 1]
+      expect(helperSessionName).toMatch(/^orca-[a-f0-9]{12}-.+-1$/)
+      expect(helperSessionName).not.toBe('orca-tab-tab-1')
     } finally {
       vi.useRealTimers()
     }
   })
 
   // ── Timeout escalation ──
+
+  it('rotates the physical helper session and retries an unresponsive daemon once', async () => {
+    succeedWith({ snapshot: 'initial' })
+    await bridge.snapshot()
+
+    const initialSnapshotArgs = execFileMock.mock.calls.find((call: unknown[]) =>
+      (call[1] as string[]).includes('snapshot')
+    )![1] as string[]
+    const initialHelperSession = initialSnapshotArgs[initialSnapshotArgs.indexOf('--session') + 1]
+    execFileMock.mockClear()
+
+    let snapshotAttempts = 0
+    execFileMock.mockImplementation(
+      (_bin: string, args: string[], _opts: unknown, cb: ExecFileCallback) => {
+        if (args.includes('close')) {
+          cb(null, JSON.stringify({ success: true, data: null }), '')
+          return { kill: vi.fn() }
+        }
+        if (args.includes('snapshot')) {
+          snapshotAttempts += 1
+          if (snapshotAttempts === 1) {
+            cb(
+              new Error('exit code 1'),
+              '',
+              'Invalid response: EOF while parsing a value at line 1 column 0 (after 5 retries - daemon may be busy or unresponsive)'
+            )
+          } else {
+            cb(null, JSON.stringify({ success: true, data: { snapshot: 'recovered' } }), '')
+          }
+          return { kill: vi.fn() }
+        }
+        throw new Error(`unexpected agent-browser args ${args.join(' ')}`)
+      }
+    )
+
+    await expect(bridge.snapshot()).resolves.toEqual({
+      browserPageId: 'tab-1',
+      snapshot: 'recovered'
+    })
+
+    const snapshotCalls = execFileMock.mock.calls.filter((call: unknown[]) =>
+      (call[1] as string[]).includes('snapshot')
+    )
+    expect(snapshotCalls).toHaveLength(2)
+    const recoveredArgs = snapshotCalls[1][1] as string[]
+    const recoveredHelperSession = recoveredArgs[recoveredArgs.indexOf('--session') + 1]
+    expect(recoveredHelperSession).not.toBe(initialHelperSession)
+    expect(recoveredArgs).toContain('--cdp')
+  })
 
   it('destroys session after 3 consecutive timeouts', async () => {
     const killedError = Object.assign(new Error('timeout'), { killed: true })

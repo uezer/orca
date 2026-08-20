@@ -1,5 +1,6 @@
 /* eslint-disable max-lines */
 import { execFile, type ChildProcess } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, accessSync, chmodSync, constants } from 'node:fs'
 import { join } from 'node:path'
 import { platform, arch } from 'node:os'
@@ -7,6 +8,7 @@ import { app, type WebContents } from 'electron'
 import { CdpWsProxy } from './cdp-ws-proxy'
 import { captureFullPageScreenshot, captureViewportScreenshot } from './cdp-screenshot'
 import { acquireElectronDebugger } from './electron-debugger-lease'
+import { BrowserTelemetryCapture } from './browser-telemetry-capture'
 import type { BrowserManager } from './browser-manager'
 import { BrowserError } from './cdp-bridge'
 import type {
@@ -60,14 +62,16 @@ const EMBEDDED_NAVIGATION_TIMEOUT_MS = 30_000
 export const AGENT_BROWSER_TEXT_ARGUMENT_MAX_BYTES = 8 * 1024
 export const AGENT_BROWSER_CLIPBOARD_WRITE_MAX_BYTES = AGENT_BROWSER_TEXT_ARGUMENT_MAX_BYTES
 
+let bridgeSessionOwnerOrdinal = 0
+
 type SessionState = {
   proxy: CdpWsProxy
   cdpEndpoint: string
+  helperSessionName: string
   initialized: boolean
   consecutiveTimeouts: number
   // Why: track active interception patterns so they can be re-enabled after session restart
   activeInterceptPatterns: string[]
-  activeCapture: boolean
   // Why: verify the tab is alive at execution time, not just enqueue time — queue delay can destroy it in between.
   webContentsId: number
   activeProcess: ChildProcess | null
@@ -339,6 +343,11 @@ function isTabClosedTransportError(message: string): boolean {
   )
 }
 
+function isAgentBrowserDaemonUnavailableError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /after \d+ retries - daemon may be busy or unresponsive/i.test(message)
+}
+
 function pageUnavailableMessageForSession(sessionName: string): string {
   const prefix = 'orca-tab-'
   const browserPageId = sessionName.startsWith(prefix) ? sessionName.slice(prefix.length) : null
@@ -585,6 +594,9 @@ export class AgentBrowserBridge {
   // Why: `agent-browser close` is async, keyed by session name — recreating before it finishes lets the old teardown close the new session.
   private readonly pendingSessionDestruction = new Map<string, Promise<void>>()
   private readonly cancelledProcesses = new WeakSet<ChildProcess>()
+  private readonly telemetryCapture = new BrowserTelemetryCapture()
+  private readonly helperSessionOwner = `${process.pid}-${Date.now().toString(36)}-${++bridgeSessionOwnerOrdinal}`
+  private helperSessionOrdinal = 0
 
   constructor(
     private readonly browserManager: BrowserManager,
@@ -671,6 +683,7 @@ export class AgentBrowserBridge {
       this.activeWebContentsId = nextWorktreeActiveWebContentsId
     }
     if (browserPageId) {
+      this.telemetryCapture.remove(browserPageId)
       const sessionName = `orca-tab-${browserPageId}`
       await this.destroySession(sessionName)
       this.pendingInterceptRestore.delete(sessionName)
@@ -688,6 +701,12 @@ export class AgentBrowserBridge {
     const session = this.sessions.get(sessionName)
     const oldWebContentsId = previousWebContentsId ?? session?.webContentsId
     const owningWorktreeId = this.browserManager.getWorktreeIdForTab(browserPageId)
+    const replacementWebContents = this.getWebContents(newWebContentsId)
+    if (replacementWebContents) {
+      await this.telemetryCapture.rebind(browserPageId, replacementWebContents)
+    } else {
+      this.telemetryCapture.remove(browserPageId)
+    }
     // Why: save intercept patterns before destroy so the new session can restore them after init.
     if (session && session.activeInterceptPatterns.length > 0) {
       this.pendingInterceptRestore.set(sessionName, [...session.activeInterceptPatterns])
@@ -1959,59 +1978,51 @@ export class AgentBrowserBridge {
     worktreeId?: string,
     browserPageId?: string
   ): Promise<BrowserCaptureStartResult> {
-    return this.enqueueTargetedCommand(worktreeId, browserPageId, async (sessionName) => {
-      const result = (await this.execAgentBrowser(sessionName, [
-        'network',
-        'har',
-        'start'
-      ])) as BrowserCaptureStartResult
-      const session = this.sessions.get(sessionName)
-      if (session) {
-        session.activeCapture = true
-      }
-      return result
-    })
+    return this.enqueueTargetedCommand(
+      worktreeId,
+      browserPageId,
+      async (_sessionName, target) =>
+        this.telemetryCapture.start(target.browserPageId, this.requireTargetWebContents(target)),
+      { ensureSession: false, ensureVisible: false }
+    )
   }
 
   async captureStop(
     worktreeId?: string,
     browserPageId?: string
   ): Promise<BrowserCaptureStopResult> {
-    return this.enqueueTargetedCommand(worktreeId, browserPageId, async (sessionName) => {
-      const result = (await this.execAgentBrowser(sessionName, [
-        'network',
-        'har',
-        'stop'
-      ])) as BrowserCaptureStopResult
-      const session = this.sessions.get(sessionName)
-      if (session) {
-        session.activeCapture = false
-      }
-      return result
-    })
+    return this.enqueueTargetedCommand(
+      worktreeId,
+      browserPageId,
+      async (_sessionName, target) => this.telemetryCapture.stop(target.browserPageId),
+      { ensureSession: false, ensureVisible: false }
+    )
   }
 
   async consoleLog(
-    _limit?: number,
+    limit?: number,
     worktreeId?: string,
     browserPageId?: string
   ): Promise<BrowserConsoleResult> {
-    return this.enqueueTargetedCommand(worktreeId, browserPageId, async (sessionName) => {
-      return (await this.execAgentBrowser(sessionName, ['console'])) as BrowserConsoleResult
-    })
+    return this.enqueueTargetedCommand(
+      worktreeId,
+      browserPageId,
+      async (_sessionName, target) => this.telemetryCapture.consoleLog(target.browserPageId, limit),
+      { ensureSession: false, ensureVisible: false }
+    )
   }
 
   async networkLog(
-    _limit?: number,
+    limit?: number,
     worktreeId?: string,
     browserPageId?: string
   ): Promise<BrowserNetworkLogResult> {
-    return this.enqueueTargetedCommand(worktreeId, browserPageId, async (sessionName) => {
-      return (await this.execAgentBrowser(sessionName, [
-        'network',
-        'requests'
-      ])) as BrowserNetworkLogResult
-    })
+    return this.enqueueTargetedCommand(
+      worktreeId,
+      browserPageId,
+      async (_sessionName, target) => this.telemetryCapture.networkLog(target.browserPageId, limit),
+      { ensureSession: false, ensureVisible: false }
+    )
   }
 
   // ── Generic passthrough ──
@@ -2027,6 +2038,7 @@ export class AgentBrowserBridge {
   // ── Session lifecycle ──
 
   async destroyAllSessions(): Promise<void> {
+    this.telemetryCapture.dispose()
     const promises: Promise<void>[] = []
     for (const sessionName of this.sessions.keys()) {
       promises.push(this.destroySession(sessionName))
@@ -2275,6 +2287,12 @@ export class AgentBrowserBridge {
     return this.resolveActiveTab(onlyWorktreeId)
   }
 
+  private nextHelperSessionName(sessionName: string): string {
+    this.helperSessionOrdinal += 1
+    const tabKey = createHash('sha256').update(sessionName).digest('hex').slice(0, 12)
+    return `orca-${tabKey}-${this.helperSessionOwner}-${this.helperSessionOrdinal}`
+  }
+
   private async ensureSession(
     sessionName: string,
     browserPageId: string,
@@ -2306,8 +2324,10 @@ export class AgentBrowserBridge {
         )
       }
 
-      // Why: the daemon persists sessions (incl. CDP port) across restarts; close the stale one first or it ignores --cdp and hits the dead port.
-      await this.closeStaleAgentBrowserSession(sessionName)
+      // Why: older Orca builds used the logical tab name directly. Retire that legacy daemon,
+      // but never reuse its name: agent-browser acknowledges `close` before its listener exits,
+      // so immediate reuse can hit the exiting daemon and return an empty JSON response.
+      await this.closeStaleAgentBrowserSession(sessionName).catch(() => {})
 
       const proxy = new CdpWsProxy(wc)
       const cdpEndpoint = await proxy.start()
@@ -2315,10 +2335,10 @@ export class AgentBrowserBridge {
       this.sessions.set(sessionName, {
         proxy,
         cdpEndpoint,
+        helperSessionName: this.nextHelperSessionName(sessionName),
         initialized: false,
         consecutiveTimeouts: 0,
         activeInterceptPatterns: [],
-        activeCapture: false,
         webContentsId,
         activeProcess: null
       })
@@ -2363,7 +2383,11 @@ export class AgentBrowserBridge {
 
       const destroy = (async (): Promise<void> => {
         try {
-          await this.runAgentBrowserRaw(sessionName, ['--session', sessionName, 'close'])
+          await this.runAgentBrowserRaw(sessionName, [
+            '--session',
+            session.helperSessionName,
+            'close'
+          ])
         } catch {
           // Session may already be dead.
         }
@@ -2425,7 +2449,11 @@ export class AgentBrowserBridge {
     const destroy = (async (): Promise<void> => {
       try {
         // Why: each tab has its own named session — close without --session leaves this tab's daemon running.
-        await this.runAgentBrowserRaw(sessionName, ['--session', sessionName, 'close'])
+        await this.runAgentBrowserRaw(sessionName, [
+          '--session',
+          session.helperSessionName,
+          'close'
+        ])
       } catch {
         // Session may already be dead
       }
@@ -2473,21 +2501,51 @@ export class AgentBrowserBridge {
       throw this.createPageUnavailableError(sessionName)
     }
 
-    const args = ['--session', sessionName]
     const managesInterceptRoutes =
       commandArgs[0] === 'network' && (commandArgs[1] === 'route' || commandArgs[1] === 'unroute')
 
-    const needsInit = !session.initialized
-    // Why: a restarted named daemon auto-launches Chrome unless every invocation reasserts Orca's CDP owner.
-    args.push('--cdp', String(session.proxy.getPort()))
-
-    // Why: exec passthrough can produce a large argv; spreading into push risks V8 argument limits.
-    for (const commandArg of commandArgs) {
-      args.push(commandArg)
+    let needsInit = !session.initialized
+    const runCommand = (): Promise<string> => {
+      const args = [
+        '--session',
+        session.helperSessionName,
+        '--cdp',
+        String(session.proxy.getPort())
+      ]
+      // Why: exec passthrough can produce a large argv; spreading into push risks V8 argument limits.
+      for (const commandArg of commandArgs) {
+        args.push(commandArg)
+      }
+      args.push('--json')
+      return this.runAgentBrowserRaw(sessionName, args, execOptions)
     }
-    args.push('--json')
 
-    const stdout = await this.runAgentBrowserRaw(sessionName, args, execOptions)
+    let stdout: string
+    try {
+      stdout = await runCommand()
+    } catch (error) {
+      if (
+        !isAgentBrowserDaemonUnavailableError(error) ||
+        this.sessions.get(sessionName) !== session
+      ) {
+        throw error
+      }
+
+      const retiredHelperSessionName = session.helperSessionName
+      if (session.activeInterceptPatterns.length > 0) {
+        this.pendingInterceptRestore.set(sessionName, [...session.activeInterceptPatterns])
+      }
+      session.helperSessionName = this.nextHelperSessionName(sessionName)
+      session.initialized = false
+      session.consecutiveTimeouts = 0
+      session.activeInterceptPatterns = []
+      needsInit = true
+
+      // Why: a fresh physical session bypasses the daemon that accepted TCP connections
+      // but returned empty responses. The new CDP client also detaches the stuck old one.
+      stdout = await runCommand()
+      void this.closeStaleAgentBrowserSession(retiredHelperSessionName).catch(() => {})
+    }
     const translated = translateResult(stdout)
 
     if (!translated.ok) {
@@ -2513,7 +2571,7 @@ export class AgentBrowserBridge {
           const urlPattern = pendingPatterns[0] ?? '**/*'
           await this.runAgentBrowserRaw(sessionName, [
             '--session',
-            sessionName,
+            session.helperSessionName,
             '--cdp',
             String(session.proxy.getPort()),
             'network',

@@ -52,11 +52,14 @@ jobs:
           retry_wait_seconds: 30
           command: pnpm install --frozen-lockfile
 
-      - name: Test screenshot recovery
+      - name: Test browser automation recovery
         run: >-
           pnpm exec vitest run --config config/vitest.config.ts
           src/main/browser/cdp-screenshot.test.ts
           src/main/browser/agent-browser-bridge-automation-visibility.test.ts
+          src/main/browser/agent-browser-bridge-command-transport.test.ts
+          src/main/browser/agent-browser-bridge-session-lifecycle.test.ts
+          src/main/browser/browser-telemetry-capture.test.ts
           src/main/browser/browser-manager-guest-visibility.test.ts
 
       - name: Typecheck main process
