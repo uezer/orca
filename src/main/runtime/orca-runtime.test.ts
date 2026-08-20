@@ -31489,6 +31489,58 @@ describe('OrcaRuntimeService', () => {
     expect((await runtime.listMobileSessionTabs(`id:${TEST_WORKTREE_ID}`)).tabs).toEqual([])
   })
 
+  it('keeps a confirmed PTY stop successful when its exited headless tab is already absent', async () => {
+    const ptyId = 'headless-worker-exited-tab'
+    const { runtimeStore } = makeRuntimeStoreWithWorkspaceSession(
+      makeWorkspaceSessionWithHeadlessTerminal({
+        tabsByWorktree: {
+          [TEST_WORKTREE_ID]: [
+            {
+              id: 'host-tab',
+              ptyId,
+              worktreeId: TEST_WORKTREE_ID,
+              title: 'Headless worker',
+              customTitle: null,
+              color: null,
+              sortOrder: 0,
+              createdAt: 1
+            }
+          ]
+        },
+        terminalLayoutsByTabId: {
+          'host-tab': makeHeadlessTerminalLayout({ [HEADLESS_LEAF_ID]: ptyId })
+        }
+      })
+    )
+    let runtime!: OrcaRuntimeService
+    const kill = vi.fn((closedPtyId: string) => {
+      runtime.onPtyExit(closedPtyId, 143)
+      return true
+    })
+    runtime = new OrcaRuntimeService(runtimeStore as never)
+    runtime.setPtyController({
+      write: () => true,
+      kill,
+      getForegroundProcess: async () => null,
+      listProcesses: async () => []
+    })
+    runtime.registerPty(ptyId, TEST_WORKTREE_ID, null, {
+      tabId: 'host-tab',
+      leafId: HEADLESS_LEAF_ID
+    })
+    runtime.syncWindowGraph(0, { tabs: [], leaves: [] })
+    await runtime.listMobileSessionTabs(`id:${TEST_WORKTREE_ID}`)
+    const handle = runtime.preAllocateHandleForPty(ptyId)
+    vi.spyOn(runtime, 'closeMobileSessionTab').mockRejectedValue(new Error('tab_not_found'))
+
+    await expect(runtime.closeTerminal(handle)).resolves.toEqual({
+      handle,
+      tabId: 'host-tab',
+      ptyKilled: true
+    })
+    expect(kill).toHaveBeenCalledWith(ptyId)
+  })
+
   it('keeps the renderer close transaction for an adopted runtime-owned tab', async () => {
     // The renderer pin state can be newer than the debounced session, so once adopted its live close guard must win over stale persisted metadata.
     const servePtyId = 'serve-adopted-1'

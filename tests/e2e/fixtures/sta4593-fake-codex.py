@@ -55,9 +55,11 @@ while True:
         if match:
             capability = match.group(1).decode("ascii")
             record("capability_received", capability=capability)
-    if capability and not acknowledged:
+    submitted = b"\x1b[201~\r" in buffer or b"\x1b[201~\n" in buffer
+    if capability and not acknowledged and submitted:
         acknowledged = True
-        sys.stdout.write("STA4593_INJECTION_ACK\n")
+        record("prompt_submitted")
+        sys.stdout.write("\x1b]0;Codex working\x07STA4593_INJECTION_ACK\n")
         sys.stdout.flush()
 
     for match in re.finditer(rb"STA4593_DONE:([A-Za-z0-9+/=]+)", buffer):

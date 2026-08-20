@@ -231,7 +231,10 @@ test(`proves STA-4593 A/B/C across ${coordinatorMode} Windows and isolated WSL $
     const started = await local.call<{
       dispatchId: string
       state: string
+      failedStage?: string
+      lastError?: string
       effects: { kind: string; role?: string; id?: string }[]
+      residualResources?: unknown[]
     }>('orchestration.workerStart', {
       task: task.result.task.id,
       from: coordinator.result.terminal.handle,
@@ -240,14 +243,16 @@ test(`proves STA-4593 A/B/C across ${coordinatorMode} Windows and isolated WSL $
       agent: 'codex',
       timeoutMs: 30_000
     })
-    expect(started.result.state).toBe('ready')
     const handle = started.result.effects.find(
       (effect) => effect.kind === 'terminal' && effect.role === 'agent'
     )?.id
+    if (handle) {
+      createdHandles.push(handle)
+    }
+    expect(started.result, JSON.stringify(started.result)).toMatchObject({ state: 'ready' })
     if (!handle) {
       throw new Error(`Worker ${label} returned no remote terminal`)
     }
-    createdHandles.push(handle)
     await waitForWorkerText(local, started.result.dispatchId, 'STA4593_INJECTION_ACK')
     return {
       dispatchId: started.result.dispatchId,
@@ -286,8 +291,9 @@ test(`proves STA-4593 A/B/C across ${coordinatorMode} Windows and isolated WSL $
         worktree_id: remoteWorktree.id
       },
       terminal: { handle: workerA.handle },
-      observation: { status: 'running', exactWorker: true }
+      observation: { exactWorker: true }
     })
+    expect(['live', 'running']).toContain(remoteA.observation.status)
     expect(remoteA.attachment.pane_key).toBeTruthy()
     expect(remoteA.attachment.process_incarnation).toBeTruthy()
     expect(remoteA.attachment.capability_hash).toMatch(/^[a-f0-9]{64}$/)

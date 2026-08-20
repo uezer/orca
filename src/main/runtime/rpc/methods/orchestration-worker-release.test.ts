@@ -7,7 +7,7 @@ import { configureWorkerReleasePaneResolution } from './orchestration-worker-rel
 import type { RpcContext } from '../core'
 import { OrchestrationDb } from '../../orchestration/db'
 import { OrcaRuntimeService } from '../../orca-runtime'
-import type { OrchestrationWorkerReadResult } from '../../../../shared/orchestration-worker-output'
+import type { OrchestrationWorkerReadTerminalResult } from '../../../../shared/orchestration-worker-output'
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve!: (value: T) => void
@@ -600,7 +600,7 @@ describe('orchestration worker release', () => {
     const page1 = (await call('orchestration.workerRead', {
       dispatch: dispatchId,
       limit: 2
-    })) as OrchestrationWorkerReadResult
+    })) as OrchestrationWorkerReadTerminalResult
     expect(page1).toMatchObject({ archived: true, terminal: { exitCode: 23, command: 'codex' } })
     expect(page1.terminal.tail).toEqual([
       'first line',
