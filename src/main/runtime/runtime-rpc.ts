@@ -471,6 +471,11 @@ export function classifyRuntimeLongPoll(request: RpcRequest): RuntimeLongPollCla
   return null
 }
 
+// Why: cold browser setup can exceed the 30 s pipe idle cap without being a metered long-poll.
+function requestNeedsKeepalive(request: RpcRequest, longPoll: LongPollClass | null): boolean {
+  return longPoll !== null || request.method.startsWith('browser.')
+}
+
 // Why: status.get has no per-connection context in the dispatcher, so stamp the scope here at the transport boundary.
 function injectDeviceScope(response: string, scope: DeviceScope): string {
   try {
@@ -1536,8 +1541,8 @@ export class OrcaRuntimeRpcServer {
     if (rejection) {
       return this.buildError(request.id, 'runtime_busy', rejection)
     }
-    if (longPoll) {
-      // Why: arm keepalive only for long-polls; short RPCs never create the setInterval. See §3.1.
+    if (requestNeedsKeepalive(request, longPoll)) {
+      // Why: keep transport liveness separate from long-poll admission.
       context?.startKeepalive()
     }
 
