@@ -478,30 +478,35 @@ export class BrowserManager {
             }
           }
 
+          var foundUnifiedTab = null;
+          var allTabs = state.unifiedTabsByWorktree || {};
+          for (var unifiedWtId in allTabs) {
+            var unifiedTabs = allTabs[unifiedWtId] || [];
+            for (var unifiedIndex = 0; unifiedIndex < unifiedTabs.length; unifiedIndex++) {
+              if (
+                unifiedTabs[unifiedIndex].contentType === 'browser' &&
+                unifiedTabs[unifiedIndex].entityId === browserWorkspaceId
+              ) {
+                foundUnifiedTab = unifiedTabs[unifiedIndex];
+                break;
+              }
+            }
+            if (foundUnifiedTab) break;
+          }
+
           if (foundWorkspace) {
             if (typeof state.setActiveBrowserTab === 'function') {
               state.setActiveBrowserTab(browserWorkspaceId);
               state = store.getState();
-            } else {
-              var allTabs = state.unifiedTabsByWorktree || {};
-              var found = null;
-              for (var unifiedWtId in allTabs) {
-                var unifiedTabs = allTabs[unifiedWtId] || [];
-                for (var unifiedIndex = 0; unifiedIndex < unifiedTabs.length; unifiedIndex++) {
-                  if (
-                    unifiedTabs[unifiedIndex].contentType === 'browser' &&
-                    unifiedTabs[unifiedIndex].entityId === browserWorkspaceId
-                  ) {
-                    found = unifiedTabs[unifiedIndex];
-                    break;
-                  }
-                }
-                if (found) break;
-              }
-              if (found) {
-                state.activateTab(found.id);
-              }
+            } else if (typeof state.setActiveTabType === 'function') {
               state.setActiveTabType('browser');
+              state = store.getState();
+            }
+            // Why: setActiveBrowserTab updates browser selection but does not
+            // select the browser entry inside the unified tab group. A terminal
+            // can therefore remain mounted and leave the WebGL guest unpaintable.
+            if (foundUnifiedTab && typeof state.activateTab === 'function') {
+              state.activateTab(foundUnifiedTab.id, { worktreeId: targetWorktreeId });
               state = store.getState();
             }
             // Why: activating the workspace alone is not enough for screenshot
