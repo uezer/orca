@@ -776,6 +776,49 @@ describe('OrcaRuntimeRpcServer', () => {
       }
     })
 
+    it('keeps cold browser automation alive without consuming long-poll capacity', async () => {
+      const userDataPath = mkdtempSync(join(tmpdir(), 'orca-runtime-rpc-'))
+      const runtime = new OrcaRuntimeService()
+      let releaseSnapshot = (): void => {}
+      vi.spyOn(runtime, 'browserSnapshot').mockImplementation(async () => {
+        await new Promise<void>((resolve) => {
+          releaseSnapshot = resolve
+        })
+        return { snapshot: 'cold browser snapshot' } as never
+      })
+      const server = new OrcaRuntimeRpcServer({
+        runtime,
+        userDataPath,
+        keepaliveIntervalMs: 10,
+        longPollCap: 1
+      })
+      await server.start()
+
+      try {
+        const metadata = readRuntimeMetadata(userDataPath)
+        const session = openFramedSession(metadata!.transports[0]!.endpoint, {
+          id: 'req_browser_cold',
+          authToken: metadata!.authToken,
+          method: 'browser.snapshot',
+          params: {}
+        })
+        await waitFor(() => session.frames.filter((frame) => frame._keepalive === true).length >= 2)
+
+        expect((server as unknown as { activeLongPolls: number }).activeLongPolls).toBe(0)
+        releaseSnapshot()
+        await session.done
+
+        const keepalives = session.frames.filter((frame) => frame._keepalive === true)
+        const terminals = session.frames.filter((frame) => frame.ok !== undefined)
+        expect(keepalives.length).toBeGreaterThanOrEqual(2)
+        expect(terminals).toHaveLength(1)
+        expect(terminals[0]).toMatchObject({ id: 'req_browser_cold', ok: true })
+      } finally {
+        releaseSnapshot()
+        await server.stop()
+      }
+    })
+
     it('returns an internal_error envelope when the dispatcher throws', async () => {
       // Why: handlers are designed to return error envelopes, never to throw,
       // but a bug somewhere in the RPC stack (e.g. JSON.stringify choking on

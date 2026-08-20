@@ -9,6 +9,7 @@ import { CdpWsProxy } from './cdp-ws-proxy'
 import { captureFullPageScreenshot, captureViewportScreenshot } from './cdp-screenshot'
 import { acquireElectronDebugger } from './electron-debugger-lease'
 import { BrowserTelemetryCapture } from './browser-telemetry-capture'
+import { armAgentBrowserWindowsPipeRelease } from './agent-browser-windows-pipe-release'
 import type { BrowserManager } from './browser-manager'
 import { BrowserError } from './cdp-bridge'
 import type {
@@ -2890,6 +2891,9 @@ export class AgentBrowserBridge {
           resolve(stdout)
         }
       )
+      if (child) {
+        armAgentBrowserWindowsPipeRelease(child)
+      }
       if (session) {
         session.activeProcess = child
       }

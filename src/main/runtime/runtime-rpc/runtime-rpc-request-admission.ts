@@ -6,6 +6,14 @@ import { errorResponse } from '../rpc/errors'
 import { RuntimeRpcBinaryRouting } from './runtime-rpc-binary-routing'
 import { classifyRuntimeLongPoll, type RuntimeLongPollClass } from './runtime-rpc-long-poll'
 
+// Why: cold browser setup can exceed the 30 s pipe idle cap without being a metered long-poll.
+function requestNeedsKeepalive(
+  request: RpcRequest,
+  longPoll: RuntimeLongPollClass | null
+): boolean {
+  return longPoll !== null || request.method.startsWith('browser.')
+}
+
 export class RuntimeRpcRequestAdmission extends RuntimeRpcBinaryRouting {
   // Why: Unix socket dispatch is one-shot and auths via the shared token from the 0o600 metadata file. See §3.1.
   protected async handleMessage(
@@ -29,8 +37,8 @@ export class RuntimeRpcRequestAdmission extends RuntimeRpcBinaryRouting {
     if (rejection) {
       return this.buildError(request.id, 'runtime_busy', rejection)
     }
-    if (longPoll) {
-      // Why: arm keepalive only for long-polls; short RPCs never create the setInterval. See §3.1.
+    if (requestNeedsKeepalive(request, longPoll)) {
+      // Why: keep transport liveness separate from long-poll admission.
       context?.startKeepalive()
     }
 
