@@ -101,7 +101,7 @@ describe('AgentBrowserBridge', () => {
     expect(snapshotCall![1]).toContain('--session')
     expect(
       (snapshotCall![1] as string[])[(snapshotCall![1] as string[]).indexOf('--session') + 1]
-    ).toBe('orca-tab-tab-b')
+    ).toMatch(/^orca-[a-f0-9]{12}-.+-1$/)
     expect(result).toEqual({ browserPageId: 'tab-b', snapshot: 'tree output' })
     expect(b.getActiveWebContentsId()).toBe(1)
   })
@@ -284,7 +284,10 @@ describe('AgentBrowserBridge', () => {
       (call[1] as string[]).includes('close')
     )
     expect(closeCall).toBeTruthy()
-    expect(closeCall![1]).toEqual(['--session', 'orca-tab-tab-1', 'close'])
+    const closeArgs = closeCall![1] as string[]
+    expect(closeArgs[0]).toBe('--session')
+    expect(closeArgs[1]).toMatch(/^orca-[a-f0-9]{12}-.+-1$/)
+    expect(closeArgs[2]).toBe('close')
   })
 
   it('repairs per-worktree active routing when the active tab closes', async () => {

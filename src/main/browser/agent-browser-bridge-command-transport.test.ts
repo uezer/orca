@@ -93,13 +93,18 @@ describe('AgentBrowserBridge', () => {
 
   // ── Session naming ──
 
-  it('uses browserPageId as session name', async () => {
+  it('uses an isolated physical session derived from browserPageId', async () => {
     succeedWith({ snapshot: '...' })
     await bridge.snapshot()
 
-    const args = execFileMock.mock.calls[0][1] as string[]
+    const args = execFileMock.mock.calls.find((call: unknown[]) =>
+      (call[1] as string[]).includes('snapshot')
+    )![1] as string[]
     expect(args).toContain('--session')
-    expect(args[args.indexOf('--session') + 1]).toBe('orca-tab-tab-1')
+    const helperSessionName = args[args.indexOf('--session') + 1]
+    expect(helperSessionName).toMatch(/^orca-[a-f0-9]{12}-.+-1$/)
+    expect(helperSessionName).not.toBe('orca-tab-tab-1')
+    expect(helperSessionName.length).toBeLessThanOrEqual(64)
   })
 
   // ── Embedded CDP ownership ──
@@ -119,10 +124,9 @@ describe('AgentBrowserBridge', () => {
     await bridge.click('@e1')
     await bridge.mouseMove(10, 20)
     await bridge.setOffline('on')
-    await bridge.consoleLog()
     await bridge.exec('get title')
 
-    for (const command of ['click', 'mouse', 'set', 'console', 'get']) {
+    for (const command of ['click', 'mouse', 'set', 'get']) {
       const call = execFileMock.mock.calls.find((candidate: unknown[]) =>
         (candidate[1] as string[]).includes(command)
       )
@@ -131,6 +135,68 @@ describe('AgentBrowserBridge', () => {
       expect(args).toContain('--cdp')
       expect(args[args.indexOf('--cdp') + 1]).toBe('9222')
     }
+  })
+
+  it('captures console and network events without spawning agent-browser', async () => {
+    const wc = mockWebContents(100)
+    webContentsFromIdMock.mockReturnValue(wc)
+
+    await expect(bridge.captureStart()).resolves.toEqual({ capturing: true })
+    const messageListener = wc.debugger.on.mock.calls.find(
+      ([event]) => event === 'message'
+    )?.[1] as ((...args: unknown[]) => void) | undefined
+    expect(messageListener).toBeTypeOf('function')
+
+    messageListener?.({}, 'Runtime.consoleAPICalled', {
+      type: 'warn',
+      args: [{ value: 'probe' }, { value: 42 }],
+      timestamp: 123,
+      stackTrace: { callFrames: [{ url: 'https://example.com/app.js', lineNumber: 7 }] }
+    })
+    messageListener?.({}, 'Network.requestWillBeSent', {
+      requestId: 'request-1',
+      request: { method: 'POST' }
+    })
+    messageListener?.({}, 'Network.responseReceived', {
+      requestId: 'request-1',
+      response: { url: 'https://example.com/api', status: 201, mimeType: 'application/json' },
+      timestamp: 456
+    })
+    messageListener?.({}, 'Network.loadingFinished', {
+      requestId: 'request-1',
+      encodedDataLength: 99
+    })
+
+    await expect(bridge.consoleLog(1)).resolves.toEqual({
+      entries: [
+        {
+          level: 'warn',
+          text: 'probe 42',
+          timestamp: 123,
+          url: 'https://example.com/app.js',
+          line: 7
+        }
+      ],
+      truncated: false
+    })
+    await expect(bridge.networkLog(1)).resolves.toEqual({
+      entries: [
+        {
+          url: 'https://example.com/api',
+          method: 'POST',
+          status: 201,
+          mimeType: 'application/json',
+          size: 99,
+          timestamp: 456
+        }
+      ],
+      truncated: false
+    })
+    await expect(bridge.captureStop()).resolves.toEqual({ stopped: true })
+
+    expect(execFileMock).not.toHaveBeenCalled()
+    expect(wc.debugger.sendCommand).toHaveBeenNthCalledWith(1, 'Runtime.enable', {})
+    expect(wc.debugger.sendCommand).toHaveBeenNthCalledWith(2, 'Network.enable', {})
   })
 
   // ── --json always appended ──
