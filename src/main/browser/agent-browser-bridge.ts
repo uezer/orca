@@ -1481,9 +1481,10 @@ export class AgentBrowserBridge {
     format?: string
   ): Promise<BrowserScreenshotResult> {
     return this.withSerializedScreenshotAccess(async () => {
-      const restore = await this.browserManager.ensureWebviewVisible(target.webContentsId)
+      const restore = await this.browserManager.acquireAutomationVisibility(target.webContentsId)
       try {
-        // Why: activating the guest lets Electron commit WebGL surfaces before capture.
+        // Why: the automation visibility lease makes the hidden guest paintable long enough
+        // for Electron to commit its WebGL surface without changing the user's active pane.
         await new Promise((r) => setTimeout(r, settleMs))
         const visibleTarget = this.resolveCommandTarget(worktreeId, target.browserPageId)
         const wc = this.requireTargetWebContents(visibleTarget)
@@ -1509,9 +1510,9 @@ export class AgentBrowserBridge {
     format: 'png' | 'jpeg'
   ): Promise<BrowserScreenshotResult> {
     return this.withSerializedScreenshotAccess(async () => {
-      const restore = await this.browserManager.ensureWebviewVisible(target.webContentsId)
+      const restore = await this.browserManager.acquireAutomationVisibility(target.webContentsId)
       try {
-        // Why: full-page CDP capture needs the same foreground compositor commit.
+        // Why: full-page CDP capture needs the same hidden paintability lease and settle time.
         await new Promise((r) => setTimeout(r, settleMs))
         const visibleTarget = this.resolveCommandTarget(worktreeId, target.browserPageId)
         const wc = this.requireTargetWebContents(visibleTarget)
