@@ -1,0 +1,90 @@
+name: Fork Windows WebGL Fix Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - fix/webgl-screenshot-recovery
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-package:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+      ORCA_LOCAL_BUILD_VERSION: 1.4.186-webglfix.${{ github.run_number }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+          cache: pnpm
+
+      - name: Cache electron-builder downloads
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~\AppData\Local\electron\Cache
+            ~\AppData\Local\electron-builder\Cache
+          key: electron-builder-win-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            electron-builder-win-
+
+      - name: Install dependencies
+        uses: nick-fields/retry@v4
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: pnpm install --frozen-lockfile
+
+      - name: Test screenshot recovery
+        run: >-
+          pnpm exec vitest run --config config/vitest.config.ts
+          src/main/browser/cdp-screenshot.test.ts
+          src/main/browser/agent-browser-bridge-automation-visibility.test.ts
+          src/main/browser/browser-manager-guest-visibility.test.ts
+
+      - name: Typecheck main process
+        run: pnpm typecheck:node
+
+      - name: Build app
+        run: pnpm build:release
+
+      - name: Package unsigned Windows app
+        shell: pwsh
+        run: |
+          node config/scripts/ensure-native-runtime.mjs --runtime=electron
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm exec electron-builder --config config/electron-builder.config.cjs --win --publish never
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path 'dist/win-unpacked/Orca.exe')) {
+            throw 'Missing dist/win-unpacked/Orca.exe'
+          }
+          if (-not (Test-Path 'dist/orca-windows-setup.exe')) {
+            throw 'Missing dist/orca-windows-setup.exe'
+          }
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v7
+        with:
+          name: orca-windows-webgl-fix-${{ github.run_number }}
+          path: |
+            dist/orca-windows-setup.exe
+            dist/win-unpacked/**
+          if-no-files-found: error
+          retention-days: 7

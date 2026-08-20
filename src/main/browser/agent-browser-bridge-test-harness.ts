@@ -50,6 +50,7 @@ export type MockWebContents = {
   removeListener: Mock<(event: string, listener: MockEmitterListener) => void>
   isDestroyed: () => boolean
   invalidate: Mock<() => void>
+  capturePage: Mock<() => Promise<unknown>>
   focus: Mock<() => void>
   debugger: MockWebContentsDebugger
 }
@@ -72,6 +73,13 @@ export function mockWebContents(
     removeListener: vi.fn(),
     isDestroyed: () => false,
     invalidate: vi.fn(),
+    capturePage: vi.fn(async () => ({
+      isEmpty: () => false,
+      getSize: () => ({ width: 800, height: 600 }),
+      crop: vi.fn(),
+      toPNG: () => Buffer.from('native-screenshot'),
+      toJPEG: () => Buffer.from('native-screenshot')
+    })),
     focus: vi.fn(),
     debugger: {
       isAttached: vi.fn(() => true),
