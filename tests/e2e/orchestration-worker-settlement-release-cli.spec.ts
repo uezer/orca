@@ -17,13 +17,13 @@ const { appendFileSync } = require('node:fs')
 const { spawnSync } = require('node:child_process')
 let capability = null
 let acknowledged = false
-process.stdout.write('\\u001b]0;Codex Ready\\u0007OpenAI Codex\\nmodel: e2e\\ndirectory: e2e\\n')
+process.stdout.write('\\u001b]0;Codex Ready\\u0007 >_ OpenAI Codex (v0.131.0)\\n model:       e2e\\n directory:   e2e\\n')
 process.stdin.on('data', (chunk) => {
   const input = chunk.toString()
   capability ||= input.match(/--dispatch-capability (dcap_[A-Za-z0-9_-]+)/)?.[1] || null
   if (!acknowledged && input.includes('\\r')) {
     acknowledged = true
-    process.stdout.write('ACK\\n')
+    process.stdout.write('\\u001b]0;Codex working\\u0007ACK\\n')
   }
   const encoded = input.match(/ORCA_E2E_WORKER_DONE:([A-Za-z0-9+/=]+)/)?.[1]
   if (!encoded || !capability) return
@@ -151,15 +151,18 @@ test('compiled CLI rejects false completion then reconciles the dead retained wo
       )
     })
     .toBe(true)
-  const started = await client.call<{ effects: { kind: string; role?: string; id?: string }[] }>(
-    'orchestration.workerStart',
-    {
-      task: task.result.task.id,
-      from: coordinator.result.terminal.handle,
-      agent: 'codex',
-      timeoutMs: 15_000
-    }
-  )
+  const started = await client.call<{
+    state: string
+    failedStage?: string
+    lastError?: string
+    effects: { kind: string; role?: string; id?: string }[]
+  }>('orchestration.workerStart', {
+    task: task.result.task.id,
+    from: coordinator.result.terminal.handle,
+    agent: 'codex',
+    timeoutMs: 15_000
+  })
+  expect(started.result.state, JSON.stringify(started.result)).toBe('ready')
   const workerHandle = started.result.effects.find(
     (effect) => effect.kind === 'terminal' && effect.role === 'agent'
   )?.id

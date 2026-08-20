@@ -33,13 +33,15 @@ export function markWorkerTerminalUserOwned(
       pane_key: string
       process_incarnation: string | null
     }[]
-    const candidates =
-      exact.length > 0
-        ? exact
-        : (
-            this.db
-              .prepare(
-                `SELECT id, owner_dispatch_id, pane_key, process_incarnation FROM worker_terminal_resources
+    const exactCurrent =
+      processIncarnation !== null &&
+      exact.some((candidate) => candidate.process_incarnation === processIncarnation)
+    const candidates = exactCurrent
+      ? exact
+      : (
+          this.db
+            .prepare(
+              `SELECT id, owner_dispatch_id, pane_key, process_incarnation FROM worker_terminal_resources
                 WHERE ownership_state = 'owned'
                   AND release_state IN ('not_requested', 'retained', 'requested')
                   AND NOT EXISTS (
@@ -48,14 +50,14 @@ export function markWorkerTerminalUserOwned(
                   )
                   AND pane_key IS NOT NULL
                   AND substr(pane_key, instr(pane_key, ':') + 1) = ?`
-              )
-              .all(paneKeyMatchSuffix(paneKey)) as {
-              id: string
-              owner_dispatch_id: string
-              pane_key: string
-              process_incarnation: string | null
-            }[]
-          ).filter((candidate) => isEquivalentPaneKey(candidate.pane_key, paneKey))
+            )
+            .all(paneKeyMatchSuffix(paneKey)) as {
+            id: string
+            owner_dispatch_id: string
+            pane_key: string
+            process_incarnation: string | null
+          }[]
+        ).filter((candidate) => isEquivalentPaneKey(candidate.pane_key, paneKey))
     const update = this.db.prepare(
       `UPDATE worker_terminal_resources
        SET ownership_state = 'user_owned', release_state = 'retained',

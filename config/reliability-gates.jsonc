@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-08-18",
+  "updatedAt": "2026-08-20",
   "policy": {
     "maturityLevels": ["experimental", "soak", "blocking", "accepted-gap", "deprecated"],
     "blockingPromotion": {
@@ -10507,6 +10507,7 @@
       "commands": [
         "pnpm exec vitest run --config config/vitest.config.ts src/main/runtime/orca-runtime-process-incarnation-liveness.test.ts src/main/runtime/rpc/methods/orchestration-worker-release.test.ts src/main/runtime/rpc/methods/orchestration-worker-release-recovery.test.ts src/main/runtime/rpc/orchestration-mutation-ledger.test.ts src/main/runtime/orchestration/worker-transcript-read.test.ts src/renderer/src/lib/worker-terminal-takeover-report.test.ts --reporter=dot",
         "pnpm exec vitest run --config config/vitest.config.ts src/main/runtime/rpc/methods/orchestration-worker-release.test.ts src/main/runtime/rpc/methods/orchestration-worker-release-recovery.test.ts src/main/runtime/rpc/orchestration-mutation-ledger.test.ts src/main/runtime/orchestration/worker-transcript-read.test.ts src/renderer/src/lib/worker-terminal-takeover-report.test.ts --reporter=dot",
+        "pnpm exec vitest run --config config/vitest.config.ts src/main/runtime/orchestration/worker-terminal-user-takeover.test.ts --reporter=dot",
         "pnpm exec vitest run --config config/vitest.config.ts tests/e2e/completed-worker-retirement-resume.unit.test.ts --reporter=verbose",
         "pnpm run build:cli && SKIP_BUILD=1 pnpm exec playwright test tests/e2e/orchestration-worker-settlement-release-cli.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1",
         "pnpm exec vitest run --config config/vitest.config.ts src/main/runtime/rpc/methods/orchestration-federated-worker-release.test.ts --reporter=dot",
@@ -10518,6 +10519,7 @@
       ],
       "testFiles": [
         "src/main/runtime/orca-runtime-process-incarnation-liveness.test.ts",
+        "src/main/runtime/orchestration/worker-terminal-user-takeover.test.ts",
         "src/main/runtime/rpc/methods/orchestration-worker-release.test.ts",
         "src/main/runtime/rpc/methods/orchestration-worker-release-recovery.test.ts",
         "src/main/runtime/rpc/orchestration-mutation-ledger.test.ts",
@@ -10564,6 +10566,10 @@
           ]
         },
         {
+          "file": "src/main/runtime/orchestration/worker-terminal-user-takeover.test.ts",
+          "assertions": ["marks a reminted current incarnation hidden by an exact stale pane row"]
+        },
+        {
           "file": "src/main/runtime/rpc/orchestration-mutation-ledger.test.ts",
           "assertions": ["resumes a pending idempotent worker release after restart"]
         },
@@ -10600,6 +10606,7 @@
           "file": "src/main/runtime/rpc/methods/orchestration-federation-release-recovery.test.ts",
           "assertions": [
             "crash recovery probes the persisted SSH process owner and converges an unknown close receipt",
+            "fences a reminted current incarnation hidden by an exact stale pane row",
             "input on a replacement incarnation cannot erase the prior worker archive"
           ]
         },
@@ -10629,7 +10636,7 @@
       ],
       "evidenceRuns": [
         {
-          "date": "2026-08-18",
+          "date": "2026-08-20",
           "runner": "manual",
           "platform": "windows",
           "command": "SKIP_BUILD=1 STA4593_COORDINATOR_MODE=headless STA4593_PAIRING_CODE_PATH=<reverted-current-wsl-pairing-code> pnpm exec playwright test tests/e2e/sta4593-wsl-federation-lifecycle.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1",
@@ -10638,7 +10645,7 @@
           "summary": "With only the owning WSL runtime reverted to 3f961ddc01, the unchanged oracle passed A then failed B because authoritative worker-read no longer contained the final marker after PTY exit."
         },
         {
-          "date": "2026-08-18",
+          "date": "2026-08-20",
           "runner": "manual",
           "platform": "windows",
           "command": "SKIP_BUILD=1 STA4593_COORDINATOR_MODE=headless STA4593_PAIRING_CODE_PATH=<packaged-1.4.184-pairing-code> pnpm exec playwright test tests/e2e/sta4593-wsl-federation-lifecycle.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1",
@@ -10647,7 +10654,7 @@
           "summary": "Current Windows candidate paired to packaged WSL 1.4.184 and preserved the legacy capability shape: unsupported release stayed retained, stop stayed unknown with processAction none, and no unrelated PTY was closed."
         },
         {
-          "date": "2026-08-18",
+          "date": "2026-08-20",
           "runner": "manual",
           "platform": "windows",
           "command": "SKIP_BUILD=1 STA4593_PAIRING_CODE_PATH=<isolated-pairing-code> pnpm exec playwright test tests/e2e/sta4593-wsl-federation-lifecycle.spec.ts --config tests/playwright.config.ts --project electron-headful --workers=1",
@@ -10656,13 +10663,22 @@
           "summary": "Current Windows desktop to isolated current WSL passed A/B/C: exact remote pane/incarnation/capability and once-only settlement; retained final stdout/stderr, exit 23, command, and cursors after PTY exit and through archive; idempotent release/stop with an unrelated PTY left live."
         },
         {
-          "date": "2026-08-18",
+          "date": "2026-08-20",
           "runner": "manual",
           "platform": "windows",
           "command": "SKIP_BUILD=1 STA4593_COORDINATOR_MODE=headless STA4593_PAIRING_CODE_PATH=<isolated-pairing-code> pnpm exec playwright test tests/e2e/sta4593-wsl-federation-lifecycle.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1",
           "result": "passed",
           "durationSeconds": 50,
           "summary": "The same current/current A/B/C oracle passed with the Windows coordinator hidden against the isolated headless WSL authority."
+        },
+        {
+          "date": "2026-08-20",
+          "runner": "local",
+          "platform": "windows",
+          "command": "pnpm run build:cli && SKIP_BUILD=1 pnpm exec playwright test tests/e2e/orchestration-worker-settlement-release-cli.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1",
+          "result": "passed",
+          "durationSeconds": 45,
+          "summary": "The current-main fake Codex oracle published structural idle and prompt-acceptance signals, then the compiled CLI rejected false completion, completed the exact Dispatch, and reconciled its dead retained resource without touching the coordinator terminal."
         },
         {
           "date": "2026-08-12",

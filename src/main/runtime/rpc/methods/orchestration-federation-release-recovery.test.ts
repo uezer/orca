@@ -72,6 +72,35 @@ describe('federated worker release recovery authority', () => {
     })
   })
 
+  it('fences a reminted current incarnation hidden by an exact stale pane row', () => {
+    const staleDispatchId = 'ctx_stale_exact_pane'
+    const currentDispatchId = 'ctx_current_reminted_pane'
+    createSettledAttachment(staleDispatchId)
+    db.db
+      .prepare(
+        `UPDATE remote_dispatch_attachments
+         SET process_incarnation = 'windows_runtime:pty:stale',
+             archive_kind = 'terminal_tail', archive_content = '["prior output"]',
+             archive_source = 'terminal', archive_status = 'captured'
+         WHERE dispatch_id = ?`
+      )
+      .run(staleDispatchId)
+    createSettledAttachment(currentDispatchId)
+    db.db
+      .prepare('UPDATE remote_dispatch_attachments SET pane_key = ? WHERE dispatch_id = ?')
+      .run(`tab_reminted:${PANE_KEY.split(':')[1]}`, currentDispatchId)
+
+    expect(db.markRemoteAttachmentUserOwned(PANE_KEY, INCARNATION)).toBe(1)
+    expect(db.getRemoteDispatchAttachment(staleDispatchId)).toMatchObject({
+      release_state: 'not_requested',
+      archive_content: '["prior output"]'
+    })
+    expect(db.getRemoteDispatchAttachment(currentDispatchId)).toMatchObject({
+      release_state: 'retained',
+      release_error: 'user_takeover'
+    })
+  })
+
   it('retries an unknown close receipt against the persisted SSH process owner', async () => {
     const dispatchId = 'ctx_ssh_close_retry'
     createSettledAttachment(dispatchId)

@@ -200,22 +200,24 @@ export function markRemoteAttachmentUserOwned(
       pane_key: string
       process_incarnation: string | null
     }[]
-    const candidates =
-      exact.length > 0
-        ? exact
-        : (this.db
-            .prepare(
-              `SELECT dispatch_id, pane_key, process_incarnation FROM remote_dispatch_attachments
+    const exactCurrent =
+      processIncarnation !== null &&
+      exact.some((candidate) => candidate.process_incarnation === processIncarnation)
+    const candidates = exactCurrent
+      ? exact
+      : (this.db
+          .prepare(
+            `SELECT dispatch_id, pane_key, process_incarnation FROM remote_dispatch_attachments
                WHERE pane_key IS NOT NULL AND ${REMOTE_ATTACHMENT_PANE_KEY_MATCH_SUFFIX_SQL} = ?
                  AND state != 'stopping'
                  AND release_state IN ('not_requested', 'retained', 'requested', 'releasing')
                  AND (release_state != 'releasing' OR release_error IS NULL)`
-            )
-            .all(paneKeyMatchSuffix(paneKey)) as {
-            dispatch_id: string
-            pane_key: string
-            process_incarnation: string | null
-          }[])
+          )
+          .all(paneKeyMatchSuffix(paneKey)) as {
+          dispatch_id: string
+          pane_key: string
+          process_incarnation: string | null
+        }[])
     const retain = this.db.prepare(
       `UPDATE remote_dispatch_attachments
        SET release_state = 'retained', release_error = 'user_takeover',
