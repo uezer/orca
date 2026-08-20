@@ -270,9 +270,9 @@ describe('AgentBrowserBridge', () => {
         ['tab-2', 'wt-2']
       ])
       const lifecycleEvents: string[] = []
-      const ensureWebviewVisibleMock = vi.fn(async (webContentsId: number) => {
-        lifecycleEvents.push(`show-${webContentsId}`)
-        return async () => {
+      const acquireAutomationVisibilityMock = vi.fn(async (webContentsId: number) => {
+        lifecycleEvents.push(`acquire-${webContentsId}`)
+        return () => {
           lifecycleEvents.push(`restore-${webContentsId}`)
         }
       })
@@ -303,7 +303,7 @@ describe('AgentBrowserBridge', () => {
 
       const b = new AgentBrowserBridge(
         mockBrowserManager(tabs, worktrees, {
-          ensureWebviewVisible: ensureWebviewVisibleMock
+          acquireAutomationVisibility: acquireAutomationVisibilityMock
         })
       )
       b.setActiveTab(1, 'wt-1')
@@ -326,9 +326,9 @@ describe('AgentBrowserBridge', () => {
       await Promise.resolve()
       await vi.advanceTimersByTimeAsync(300)
 
-      expect(lifecycleEvents).toContain('show-1')
+      expect(lifecycleEvents).toContain('acquire-1')
       expect(lifecycleEvents).toContain('capture-1')
-      expect(lifecycleEvents).not.toContain('show-2')
+      expect(lifecycleEvents).not.toContain('acquire-2')
 
       expect(releaseFirstScreenshot).not.toBeNull()
       releaseFirstScreenshot!()
@@ -340,7 +340,9 @@ describe('AgentBrowserBridge', () => {
       await Promise.resolve()
       await Promise.resolve()
 
-      expect(lifecycleEvents.indexOf('restore-1')).toBeLessThan(lifecycleEvents.indexOf('show-2'))
+      expect(lifecycleEvents.indexOf('restore-1')).toBeLessThan(
+        lifecycleEvents.indexOf('acquire-2')
+      )
 
       await vi.advanceTimersByTimeAsync(300)
       await expect(second).resolves.toEqual({
