@@ -270,50 +270,49 @@ describe('AgentBrowserBridge', () => {
         ['tab-2', 'wt-2']
       ])
       const lifecycleEvents: string[] = []
-      const acquireAutomationVisibilityMock = vi.fn(async (webContentsId: number) => {
-        lifecycleEvents.push(`acquire-${webContentsId}`)
-        return () => {
+      const ensureWebviewVisibleMock = vi.fn(async (webContentsId: number) => {
+        lifecycleEvents.push(`show-${webContentsId}`)
+        return async () => {
           lifecycleEvents.push(`restore-${webContentsId}`)
         }
       })
       const wc1 = mockWebContents(1)
       const wc2 = mockWebContents(2)
+      let releaseFirstScreenshot: (() => void) | null = null
+      wc1.capturePage.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            lifecycleEvents.push('capture-1')
+            releaseFirstScreenshot = () =>
+              resolve({
+                isEmpty: () => false,
+                toPNG: () => Buffer.from('serialized-screenshot-1')
+              })
+          })
+      )
+      wc2.capturePage.mockImplementation(async () => {
+        lifecycleEvents.push('capture-2')
+        return {
+          isEmpty: () => false,
+          toPNG: () => Buffer.from('serialized-screenshot-2')
+        }
+      })
       webContentsFromIdMock.mockImplementation((id: number) =>
         id === 1 ? wc1 : id === 2 ? wc2 : null
       )
-      existsSyncMock.mockReturnValue(true)
-      const screenshotBytes = Buffer.from('serialized-screenshot')
-      readFileSyncMock.mockReturnValue(screenshotBytes)
 
       const b = new AgentBrowserBridge(
         mockBrowserManager(tabs, worktrees, {
-          acquireAutomationVisibility: acquireAutomationVisibilityMock
+          ensureWebviewVisible: ensureWebviewVisibleMock
         })
       )
       b.setActiveTab(1, 'wt-1')
       b.setActiveTab(2, 'wt-2')
 
-      let releaseFirstScreenshot: (() => void) | null = null
       execFileMock.mockImplementation(
         (_bin: string, args: string[], _opts: unknown, cb: ExecFileCallback) => {
           if (args.includes('close')) {
             cb(null, JSON.stringify({ success: true, data: null }), '')
-            return
-          }
-          if (args.includes('screenshot')) {
-            const sessionName = args[args.indexOf('--session') + 1]
-            lifecycleEvents.push(`command-${sessionName}`)
-            if (sessionName === 'orca-tab-tab-1' && !releaseFirstScreenshot) {
-              releaseFirstScreenshot = () => {
-                cb(null, JSON.stringify({ success: true, data: { path: '/tmp/tab-1.png' } }), '')
-              }
-              return
-            }
-            cb(
-              null,
-              JSON.stringify({ success: true, data: { path: `/tmp/${sessionName}.png` } }),
-              ''
-            )
             return
           }
           cb(null, JSON.stringify({ success: true, data: { ok: true } }), '')
@@ -327,27 +326,25 @@ describe('AgentBrowserBridge', () => {
       await Promise.resolve()
       await vi.advanceTimersByTimeAsync(300)
 
-      expect(lifecycleEvents).toContain('acquire-1')
-      expect(lifecycleEvents).toContain('command-orca-tab-tab-1')
-      expect(lifecycleEvents).not.toContain('acquire-2')
+      expect(lifecycleEvents).toContain('show-1')
+      expect(lifecycleEvents).toContain('capture-1')
+      expect(lifecycleEvents).not.toContain('show-2')
 
       expect(releaseFirstScreenshot).not.toBeNull()
       releaseFirstScreenshot!()
       await expect(first).resolves.toEqual({
-        data: screenshotBytes.toString('base64'),
+        data: Buffer.from('serialized-screenshot-1').toString('base64'),
         format: 'png'
       })
 
       await Promise.resolve()
       await Promise.resolve()
 
-      expect(lifecycleEvents.indexOf('restore-1')).toBeLessThan(
-        lifecycleEvents.indexOf('acquire-2')
-      )
+      expect(lifecycleEvents.indexOf('restore-1')).toBeLessThan(lifecycleEvents.indexOf('show-2'))
 
       await vi.advanceTimersByTimeAsync(300)
       await expect(second).resolves.toEqual({
-        data: screenshotBytes.toString('base64'),
+        data: Buffer.from('serialized-screenshot-2').toString('base64'),
         format: 'png'
       })
     } finally {

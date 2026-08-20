@@ -476,21 +476,21 @@ export class BrowserManager {
   }
 
   // Why: screenshots target page ids but visible chrome is keyed by workspace id; activate by workspace or the webview stays hidden and capture times out.
-  async ensureWebviewVisible(guestWebContentsId: number): Promise<() => void> {
+  async ensureWebviewVisible(guestWebContentsId: number): Promise<() => Promise<void>> {
     const browserPageId = this.resolveBrowserTabIdForGuestWebContentsId(guestWebContentsId)
     if (!browserPageId) {
-      return () => {}
+      return async () => {}
     }
     const browserWorkspaceId = this.workspaceIdByPageId.get(browserPageId) ?? browserPageId
     const worktreeId = this.worktreeIdByTabId.get(browserPageId) ?? null
     const renderer = this.resolveRendererForBrowserTab(browserPageId)
     if (!renderer || renderer.isDestroyed()) {
-      return () => {}
+      return async () => {}
     }
 
     const prev = await renderer
       .executeJavaScript(
-        `(function() {
+        `(async function() {
           var store = window.__store;
           if (!store) return null;
           var state = store.getState();
@@ -600,6 +600,14 @@ export class BrowserManager {
             }
           }
 
+          // Why: React must commit the active pane before the guest compositor can paint.
+          await Promise.race([
+            new Promise(function(resolve) {
+              requestAnimationFrame(function() { requestAnimationFrame(resolve); });
+            }),
+            new Promise(function(resolve) { setTimeout(resolve, 1000); })
+          ]);
+
           return {
             prevTabType: prevTabType,
             prevActiveWorktreeId: prevActiveWorktreeId,
@@ -623,16 +631,16 @@ export class BrowserManager {
         prev.prevActiveBrowserPageId !== prev.targetBrowserPageId)
 
     if (!needsRestore) {
-      return () => {}
+      return async () => {}
     }
 
-    return () => {
+    return async () => {
       if (!prev || !renderer || renderer.isDestroyed()) {
         return
       }
-      renderer
+      await renderer
         .executeJavaScript(
-          `(function() {
+          `(async function() {
             var store = window.__store;
             if (!store) return;
             var state = store.getState();
@@ -680,6 +688,12 @@ export class BrowserManager {
             if (${JSON.stringify(prev?.prevTabType)} !== 'browser') {
               state.setActiveTabType(${JSON.stringify(prev?.prevTabType)});
             }
+            await Promise.race([
+              new Promise(function(resolve) {
+                requestAnimationFrame(function() { requestAnimationFrame(resolve); });
+              }),
+              new Promise(function(resolve) { setTimeout(resolve, 1000); })
+            ]);
           })()`
         )
         .catch(() => {})
