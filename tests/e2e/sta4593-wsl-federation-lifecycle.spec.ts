@@ -7,7 +7,11 @@ import { test, expect } from './helpers/orca-app'
 import { ensureTerminalVisible, waitForActiveWorktree, waitForSessionReady } from './helpers/store'
 import { waitForActivePaneHookDescriptor, waitForActivePanePtyId } from './helpers/terminal'
 import { RuntimeClient } from '../../src/cli/runtime-client'
-import type { RuntimeStatus, RuntimeTerminalListResult } from '../../src/shared/runtime-types'
+import type {
+  RuntimeStatus,
+  RuntimeTerminalListResult,
+  RuntimeTerminalWait
+} from '../../src/shared/runtime-types'
 import type { OrchestrationWorkerReadResult } from '../../src/shared/orchestration-worker-output'
 import {
   ORCHESTRATION_FEDERATION_WORKER_RELEASE_RUNTIME_CAPABILITY,
@@ -39,6 +43,7 @@ type WorkerShow = {
   remoteRuntimeEpoch: string
   terminal: {
     handle: string
+    connected: boolean
     command?: string | null
     exitCode?: number | null
   } | null
@@ -385,7 +390,17 @@ test(`proves STA-4593 A/B/C across ${coordinatorMode} Windows and isolated WSL $
       await local.call<WorkerShow>('orchestration.workerShow', { dispatch: workerB.dispatchId })
     ).result
     expect(exitedB.observation.status).toBe('exited')
-    expect(exitedB.terminal).toMatchObject({ handle: workerB.handle })
+    expect(exitedB.terminal).toMatchObject({ handle: workerB.handle, connected: false })
+    const remoteExit = await remote.call<{ wait: RuntimeTerminalWait }>('terminal.wait', {
+      terminal: workerB.handle,
+      for: 'exit',
+      timeoutMs: 10_000
+    })
+    expect(remoteExit.result.wait).toMatchObject({
+      status: 'exited',
+      satisfied: true,
+      exitCode: 23
+    })
     expect(readLedger().some((entry) => entry.event === 'exit_marker')).toBe(true)
     const readBAfterClose = await local
       .call<OrchestrationWorkerReadResult>('orchestration.workerRead', {
@@ -408,6 +423,13 @@ test(`proves STA-4593 A/B/C across ${coordinatorMode} Windows and isolated WSL $
         expect(finalOutputPresent).toBe(true)
       }
       expect(readBAfterClose.terminal.status).toBe('exited')
+      if (supportsFederatedRelease) {
+        expect(readBAfterClose.terminal.exitCode).toBe(23)
+        expect(readBAfterClose.terminal.command).toContain('codex')
+        expect(readBAfterClose.terminal.oldestCursor).toMatch(/^\d+$/)
+        expect(readBAfterClose.terminal.latestCursor).toMatch(/^[1-9]\d*$/)
+        expect(readBAfterClose.terminal.nextCursor).toBe(readBAfterClose.terminal.latestCursor)
+      }
     }
 
     const control = await remote.call<{ terminal: { handle: string } }>('terminal.create', {

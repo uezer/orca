@@ -1,4 +1,5 @@
 import type { AgentType, NativeChatMessage } from '../../../shared/native-chat-types'
+import type { TerminalExitCause } from '../../../shared/terminal-exit-cause'
 import type { OrcaRuntimeService } from '../orca-runtime'
 import { OrchestrationError } from './orchestration-error'
 import {
@@ -33,6 +34,9 @@ export type WorkerTerminalTailArchive = {
   lines: string[]
   truncated: boolean
   terminalStatus: string
+  exitCode?: number | null
+  exitCause?: TerminalExitCause
+  command?: string | null
   warnings: string[]
 }
 
@@ -87,8 +91,7 @@ export async function captureWorkerOutputArchive(args: {
   }
   const redacted = redactWorkerTerminalLines(terminal.tail)
   const bounded = boundArchiveLines(redacted.lines)
-  // Why: an exited PTY zeroes its tail immediately, so an empty capture is a distinct receipt,
-  // not silent success — worker-read must be able to say why nothing is there.
+  // An empty capture is explicit evidence, not silent success.
   const empty = bounded.lines.every((line) => line.trim() === '')
   return {
     kind: 'terminal_tail',
@@ -97,6 +100,9 @@ export async function captureWorkerOutputArchive(args: {
       lines: bounded.lines,
       truncated: terminal.truncated || bounded.truncated,
       terminalStatus: terminal.status,
+      ...(terminal.exitCode !== undefined ? { exitCode: terminal.exitCode } : {}),
+      ...(terminal.exitCause ? { exitCause: terminal.exitCause } : {}),
+      ...(terminal.command !== undefined ? { command: terminal.command } : {}),
       warnings: empty
         ? [
             ...redacted.warnings,

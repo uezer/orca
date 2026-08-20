@@ -7,6 +7,7 @@ import { configureWorkerReleasePaneResolution } from './orchestration-worker-rel
 import type { RpcContext } from '../core'
 import { OrchestrationDb } from '../../orchestration/db'
 import { OrcaRuntimeService } from '../../orca-runtime'
+import type { OrchestrationWorkerReadResult } from '../../../../shared/orchestration-worker-output'
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve!: (value: T) => void
@@ -588,7 +589,10 @@ describe('orchestration worker release', () => {
       status: 'running',
       tail: ['first line', `capability dcap_${'a'.repeat(24)} leaked`, 'last line'],
       truncated: false,
-      nextCursor: '3'
+      nextCursor: '3',
+      exitCode: 23,
+      exitCause: { kind: 'exited', exitCode: 23 },
+      command: 'codex'
     })
     await call('orchestration.workerRelease', { dispatch: dispatchId })
     vi.mocked(runtime.readTerminal).mockClear()
@@ -596,8 +600,8 @@ describe('orchestration worker release', () => {
     const page1 = (await call('orchestration.workerRead', {
       dispatch: dispatchId,
       limit: 2
-    })) as { archived?: boolean; terminal: { tail: string[] }; cursor: string | null }
-    expect(page1.archived).toBe(true)
+    })) as OrchestrationWorkerReadResult
+    expect(page1).toMatchObject({ archived: true, terminal: { exitCode: 23, command: 'codex' } })
     expect(page1.terminal.tail).toEqual([
       'first line',
       'capability [dispatch capability redacted] leaked'
