@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { captureFullPageScreenshot, captureScreenshot } from './cdp-screenshot'
+import {
+  captureFullPageScreenshot,
+  captureScreenshot,
+  captureViewportScreenshot
+} from './cdp-screenshot'
 
 function createMockWebContents() {
   return {
@@ -14,225 +18,133 @@ function createMockWebContents() {
   }
 }
 
-describe('captureScreenshot', () => {
+function createNativeImage(data: string, width = 400, height = 300) {
+  return {
+    isEmpty: () => false,
+    getSize: () => ({ width, height }),
+    crop: vi.fn(),
+    toPNG: () => Buffer.from(data),
+    toJPEG: vi.fn(() => Buffer.from(data))
+  }
+}
+
+describe('captureViewportScreenshot', () => {
   afterEach(() => {
     vi.useRealTimers()
   })
 
-  it('invalidates the guest before forwarding Page.captureScreenshot', async () => {
+  it('prefers Electron native capture for a painted viewport', async () => {
     const webContents = createMockWebContents()
-    webContents.debugger.sendCommand.mockResolvedValueOnce({ data: 'png-data' })
-    const onResult = vi.fn()
-    const onError = vi.fn()
+    webContents.capturePage.mockResolvedValueOnce(createNativeImage('native-png'))
 
-    captureScreenshot(webContents as never, { format: 'png' }, onResult, onError)
-    await Promise.resolve()
+    await expect(
+      captureViewportScreenshot(webContents as never, { format: 'png' })
+    ).resolves.toEqual({ data: Buffer.from('native-png').toString('base64') })
 
     expect(webContents.invalidate).toHaveBeenCalledTimes(1)
+    expect(webContents.capturePage).toHaveBeenCalledTimes(1)
+    expect(webContents.debugger.sendCommand).not.toHaveBeenCalled()
+  })
+
+  it('falls back to guarded CDP capture when native capture stalls', async () => {
+    vi.useFakeTimers()
+    const webContents = createMockWebContents()
+    webContents.capturePage.mockImplementation(() => new Promise(() => {}))
+    webContents.debugger.sendCommand.mockResolvedValueOnce({ data: 'cdp-png' })
+
+    const screenshot = captureViewportScreenshot(webContents as never, { format: 'png' })
+    await vi.advanceTimersByTimeAsync(3000)
+
+    await expect(screenshot).resolves.toEqual({ data: 'cdp-png' })
     expect(webContents.debugger.sendCommand).toHaveBeenCalledWith('Page.captureScreenshot', {
       format: 'png'
     })
-    expect(onResult).toHaveBeenCalledWith({ data: 'png-data' })
-    expect(onError).not.toHaveBeenCalled()
   })
 
-  it('falls back to capturePage when Page.captureScreenshot stalls', async () => {
-    vi.useFakeTimers()
-
+  it('crops a native image when the clip is inside the painted viewport', async () => {
+    const croppedImage = createNativeImage('cropped-png', 60, 80)
+    const nativeImage = createNativeImage('full-png')
+    nativeImage.crop.mockReturnValueOnce(croppedImage)
     const webContents = createMockWebContents()
-    webContents.debugger.sendCommand.mockImplementation(() => new Promise(() => {}))
-    webContents.capturePage.mockResolvedValueOnce({
-      isEmpty: () => false,
-      toPNG: () => Buffer.from('fallback-png')
-    })
-    const onResult = vi.fn()
-    const onError = vi.fn()
+    webContents.capturePage.mockResolvedValueOnce(nativeImage)
 
-    captureScreenshot(webContents as never, { format: 'png' }, onResult, onError)
-    await vi.advanceTimersByTimeAsync(8000)
-
-    expect(webContents.capturePage).toHaveBeenCalledTimes(1)
-    expect(onResult).toHaveBeenCalledWith({
-      data: Buffer.from('fallback-png').toString('base64')
-    })
-    expect(onError).not.toHaveBeenCalled()
-  })
-
-  it('crops the fallback image when the request includes a visible clip rect', async () => {
-    vi.useFakeTimers()
-
-    const croppedImage = {
-      isEmpty: () => false,
-      toPNG: () => Buffer.from('cropped-png')
-    }
-    const webContents = createMockWebContents()
-    webContents.debugger.sendCommand.mockImplementation(() => new Promise(() => {}))
-    webContents.capturePage.mockResolvedValueOnce({
-      isEmpty: () => false,
-      getSize: () => ({ width: 400, height: 300 }),
-      crop: vi.fn(() => croppedImage),
-      toPNG: () => Buffer.from('full-png')
-    })
-    const onResult = vi.fn()
-    const onError = vi.fn()
-
-    captureScreenshot(
-      webContents as never,
-      {
+    await expect(
+      captureViewportScreenshot(webContents as never, {
         format: 'png',
         clip: { x: 10, y: 20, width: 30, height: 40, scale: 2 }
-      },
-      onResult,
-      onError
-    )
-    await vi.advanceTimersByTimeAsync(8000)
+      })
+    ).resolves.toEqual({ data: Buffer.from('cropped-png').toString('base64') })
 
-    const fallbackImage = await webContents.capturePage.mock.results[0]?.value
-    expect(fallbackImage.crop).toHaveBeenCalledWith({ x: 20, y: 40, width: 60, height: 80 })
-    expect(onResult).toHaveBeenCalledWith({
-      data: Buffer.from('cropped-png').toString('base64')
-    })
-    expect(onError).not.toHaveBeenCalled()
+    expect(nativeImage.crop).toHaveBeenCalledWith({ x: 20, y: 40, width: 60, height: 80 })
   })
 
-  it('keeps the timeout error when the request needs beyond-viewport pixels', async () => {
-    vi.useFakeTimers()
-
+  it('skips native capture when the request needs beyond-viewport pixels', async () => {
     const webContents = createMockWebContents()
-    webContents.debugger.sendCommand.mockImplementation(() => new Promise(() => {}))
-    webContents.capturePage.mockResolvedValueOnce({
-      isEmpty: () => false,
-      getSize: () => ({ width: 400, height: 300 }),
-      crop: vi.fn(),
-      toPNG: () => Buffer.from('full-png')
-    })
-    const onResult = vi.fn()
-    const onError = vi.fn()
+    webContents.debugger.sendCommand.mockResolvedValueOnce({ data: 'full-cdp-png' })
 
-    captureScreenshot(
-      webContents as never,
-      {
+    await expect(
+      captureViewportScreenshot(webContents as never, {
         format: 'png',
-        captureBeyondViewport: true,
-        clip: { x: 0, y: 0, width: 800, height: 1200, scale: 1 }
-      },
-      onResult,
-      onError
-    )
-    await vi.advanceTimersByTimeAsync(8000)
+        captureBeyondViewport: true
+      })
+    ).resolves.toEqual({ data: 'full-cdp-png' })
 
-    expect(onResult).not.toHaveBeenCalled()
-    expect(onError).toHaveBeenCalledWith(
-      'Screenshot timed out — the browser tab may not be visible or the window may not have focus.'
-    )
-  })
-
-  it('ignores the fallback result when CDP settles first after the timeout fires', async () => {
-    vi.useFakeTimers()
-
-    let resolveCapturePage: ((value: unknown) => void) | null = null
-    let resolveSendCommand: ((value: unknown) => void) | null = null
-    const webContents = createMockWebContents()
-    webContents.debugger.sendCommand.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          resolveSendCommand = resolve
-        })
-    )
-    webContents.capturePage.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          resolveCapturePage = resolve
-        })
-    )
-    const onResult = vi.fn()
-    const onError = vi.fn()
-
-    captureScreenshot(webContents as never, { format: 'png' }, onResult, onError)
-    await vi.advanceTimersByTimeAsync(8000)
-
-    expect(resolveSendCommand).toBeTypeOf('function')
-    resolveSendCommand!({ data: 'cdp-png' })
-    await Promise.resolve()
-
-    expect(resolveCapturePage).toBeTypeOf('function')
-    resolveCapturePage!({
-      isEmpty: () => false,
-      getSize: () => ({ width: 100, height: 100 }),
-      crop: vi.fn(),
-      toPNG: () => Buffer.from('fallback-png')
+    expect(webContents.capturePage).not.toHaveBeenCalled()
+    expect(webContents.debugger.sendCommand).toHaveBeenCalledWith('Page.captureScreenshot', {
+      format: 'png',
+      captureBeyondViewport: true
     })
-    await Promise.resolve()
-
-    expect(onResult).toHaveBeenCalledTimes(1)
-    expect(onResult).toHaveBeenCalledWith({ data: 'cdp-png' })
-    expect(onError).not.toHaveBeenCalled()
   })
 
-  it('reports the original timeout when the fallback capture is unavailable', async () => {
-    vi.useFakeTimers()
-
+  it('preserves zero JPEG quality on native capture', async () => {
+    const nativeImage = createNativeImage('native-jpeg')
     const webContents = createMockWebContents()
-    webContents.debugger.sendCommand.mockImplementation(() => new Promise(() => {}))
-    webContents.capturePage.mockResolvedValueOnce({
-      isEmpty: () => true,
-      toPNG: () => Buffer.from('unused')
+    webContents.capturePage.mockResolvedValueOnce(nativeImage)
+
+    await captureViewportScreenshot(webContents as never, { format: 'jpeg', quality: 0 })
+
+    expect(nativeImage.toJPEG).toHaveBeenCalledWith(0)
+  })
+
+  it('falls back to CDP when native capture returns an empty image', async () => {
+    const webContents = createMockWebContents()
+    webContents.capturePage.mockResolvedValueOnce({ isEmpty: () => true })
+    webContents.debugger.sendCommand.mockResolvedValueOnce({ data: 'cdp-after-empty' })
+
+    await expect(captureViewportScreenshot(webContents as never)).resolves.toEqual({
+      data: 'cdp-after-empty'
     })
-    const onResult = vi.fn()
-    const onError = vi.fn()
-
-    captureScreenshot(webContents as never, { format: 'png' }, onResult, onError)
-    await vi.advanceTimersByTimeAsync(8000)
-
-    expect(onResult).not.toHaveBeenCalled()
-    expect(onError).toHaveBeenCalledWith(
-      'Screenshot timed out — the browser tab may not be visible or the window may not have focus.'
-    )
   })
 
-  it('reports the original timeout when fallback encoding fails', async () => {
+  it('reports a bounded timeout when both native and CDP capture stall', async () => {
     vi.useFakeTimers()
-
     const webContents = createMockWebContents()
-    webContents.debugger.sendCommand.mockImplementation(() => new Promise(() => {}))
-    webContents.capturePage.mockResolvedValueOnce({
-      isEmpty: () => {
-        throw new Error('native image unavailable')
-      }
-    })
-    const onResult = vi.fn()
-    const onError = vi.fn()
-
-    captureScreenshot(webContents as never, { format: 'png' }, onResult, onError)
-    await vi.advanceTimersByTimeAsync(8000)
-
-    expect(onResult).not.toHaveBeenCalled()
-    expect(onError).toHaveBeenCalledWith(
-      'Screenshot timed out — the browser tab may not be visible or the window may not have focus.'
-    )
-  })
-
-  it('reports the timeout when both CDP and fallback capture stall', async () => {
-    vi.useFakeTimers()
-
-    const webContents = createMockWebContents()
-    webContents.debugger.sendCommand.mockImplementation(() => new Promise(() => {}))
     webContents.capturePage.mockImplementation(() => new Promise(() => {}))
+    webContents.debugger.sendCommand.mockImplementation(() => new Promise(() => {}))
+
+    const screenshot = captureViewportScreenshot(webContents as never)
+    const rejection = expect(screenshot).rejects.toThrow(
+      'Screenshot timed out — the browser tab may not be visible or the window may not have focus.'
+    )
+    await vi.advanceTimersByTimeAsync(11_000)
+    await rejection
+  })
+})
+
+describe('captureScreenshot CDP proxy adapter', () => {
+  it('returns native capture through the callback contract', async () => {
+    const webContents = createMockWebContents()
+    webContents.capturePage.mockResolvedValueOnce(createNativeImage('proxy-native'))
     const onResult = vi.fn()
     const onError = vi.fn()
 
     captureScreenshot(webContents as never, { format: 'png' }, onResult, onError)
-    await vi.advanceTimersByTimeAsync(8000)
+    await vi.waitFor(() => expect(onResult).toHaveBeenCalled())
 
-    expect(webContents.capturePage).toHaveBeenCalledTimes(1)
-    expect(onResult).not.toHaveBeenCalled()
+    expect(onResult).toHaveBeenCalledWith({
+      data: Buffer.from('proxy-native').toString('base64')
+    })
     expect(onError).not.toHaveBeenCalled()
-
-    await vi.advanceTimersByTimeAsync(1000)
-
-    expect(onError).toHaveBeenCalledWith(
-      'Screenshot timed out — the browser tab may not be visible or the window may not have focus.'
-    )
   })
 })
 
