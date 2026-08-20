@@ -1,7 +1,7 @@
 import React from 'react'
-import { Server, ServerOff } from 'lucide-react'
 
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { HostRowIcon } from '../host-row-icon'
 import { useAppStore } from '@/store'
 import { parseExecutionHostId, type ExecutionHostId } from '../../../../shared/execution-host'
 import { translate } from '@/i18n/i18n'
@@ -14,9 +14,10 @@ type NoticeHostGlyphProps = {
 /**
  * The host indicator for a discovery-notice row.
  *
- * Deliberately the same glyph and "Project on …" tooltip worktree cards use
- * (worktree-card-header.tsx), so one project's rows read the same way wherever
- * they appear. Local hosts get none, matching the cards.
+ * Deliberately the one host glyph vocabulary the composer's run-target rows
+ * already use (HostRowIcon: a monitor for this computer, a server for anything
+ * remote), plus the worktree card's "Project on …" tooltip. Every row gets one,
+ * including local, so no row is the odd one out.
  */
 export default function NoticeHostGlyph({
   hostId,
@@ -30,7 +31,7 @@ export default function NoticeHostGlyph({
     return !s.runtimeStatusByEnvironmentId.get(host.environmentId)?.status
   })
 
-  if (!host || host.kind === 'local') {
+  if (!host) {
     return null
   }
 
@@ -46,21 +47,27 @@ export default function NoticeHostGlyph({
           'Project on SSH host {{hostName}}',
           { hostName: hostLabel }
         )
-      : translate(
-          'auto.components.sidebar.NoticeHostGlyph.runtimeHostProject',
-          'Project on {{hostName}}',
-          { hostName: hostLabel }
-        )
+      : host.kind === 'local'
+        ? translate(
+            'auto.components.sidebar.NoticeHostGlyph.localHostProject',
+            'Project on this host'
+          )
+        : translate(
+            'auto.components.sidebar.NoticeHostGlyph.runtimeHostProject',
+            'Project on {{hostName}}',
+            { hostName: hostLabel }
+          )
 
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <span className="inline-flex shrink-0 items-center" data-notice-host-kind={host.kind}>
-          {isDisconnected ? (
-            <ServerOff className="size-3 text-destructive" aria-hidden="true" />
-          ) : (
-            <Server className="size-3 text-muted-foreground" aria-hidden="true" />
-          )}
+          <HostRowIcon
+            hostId={hostId}
+            className={`size-3 shrink-0 ${
+              isDisconnected ? 'text-destructive' : 'text-muted-foreground'
+            }`}
+          />
         </span>
       </TooltipTrigger>
       <TooltipContent side="top" sideOffset={4}>

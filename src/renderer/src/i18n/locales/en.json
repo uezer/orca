@@ -5733,6 +5733,7 @@
         "NoticeHostGlyph": {
           "hostDisconnected": "{{hostName}} disconnected",
           "sshHostProject": "Project on SSH host {{hostName}}",
+          "localHostProject": "Project on this host",
           "runtimeHostProject": "Project on {{hostName}}"
         },
         "newExternalWorktreesInboxActions": {

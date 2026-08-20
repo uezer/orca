@@ -77,10 +77,28 @@ describe('NoticeHostGlyph', () => {
     )
   })
 
-  it('draws nothing for a local host, matching the worktree card', async () => {
+  it('gives the local host the monitor glyph the run-target rows use', async () => {
     const container = await render('local', 'Local Mac')
 
-    expect(container.textContent).toBe('')
+    expect(container.querySelector('[data-notice-host-kind="local"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="tooltip"]')?.textContent).toBe(
+      'Project on this host'
+    )
+  })
+
+  it('draws one glyph vocabulary: a monitor for local, a server for remote', async () => {
+    const local = await render('local', 'Local Mac')
+    const remote = await render('ssh:openclaw-target')
+
+    const glyph = (container: HTMLDivElement): string =>
+      container.querySelector('svg')?.getAttribute('class') ?? ''
+    // The same vocabulary the run-target rows use: this computer vs a server.
+    expect(glyph(local)).toContain('lucide-monitor')
+    expect(glyph(remote)).toContain('lucide-server')
+    // Same size and tone tokens, so neither row reads as decorated.
+    const tokens = (value: string): string[] =>
+      value.split(' ').filter((entry) => !entry.startsWith('lucide'))
+    expect(tokens(glyph(local))).toEqual(tokens(glyph(remote)))
   })
 
   it('keeps its copy in the English catalog', async () => {
@@ -89,6 +107,7 @@ describe('NoticeHostGlyph', () => {
     expect(en.auto.components.sidebar.NoticeHostGlyph).toMatchObject({
       hostDisconnected: '{{hostName}} disconnected',
       sshHostProject: 'Project on SSH host {{hostName}}',
+      localHostProject: 'Project on this host',
       runtimeHostProject: 'Project on {{hostName}}'
     })
   })
