@@ -1,10 +1,20 @@
-import type { ChildProcess } from 'node:child_process'
+type PipeStream = {
+  on: (event: 'data', listener: () => void) => unknown
+  off: (event: 'data', listener: () => void) => unknown
+  destroy: () => void
+}
+
+type PipeBackedChild = {
+  once?: (event: 'exit' | 'close', listener: () => void) => unknown
+  stdout?: PipeStream | null
+  stderr?: PipeStream | null
+}
 
 const DEFAULT_PIPE_QUIET_MS = 500
 
 // Why: agent-browser's Windows daemon inherits capture pipes, so execFile never observes EOF after the CLI exits.
 export function armAgentBrowserWindowsPipeRelease(
-  child: ChildProcess,
+  child: PipeBackedChild,
   targetPlatform: NodeJS.Platform = process.platform,
   quietMs = DEFAULT_PIPE_QUIET_MS
 ): void {
