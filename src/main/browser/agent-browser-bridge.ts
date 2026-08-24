@@ -1560,7 +1560,7 @@ export class AgentBrowserBridge {
       } catch (error) {
         throw new BrowserError('browser_error', (error as Error).message)
       } finally {
-        await restore()
+        restore()
       }
     })
   }
@@ -1582,7 +1582,7 @@ export class AgentBrowserBridge {
       } catch (error) {
         throw new BrowserError('browser_error', (error as Error).message)
       } finally {
-        await restore()
+        restore()
       }
     })
   }
