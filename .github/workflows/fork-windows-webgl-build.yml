@@ -16,9 +16,9 @@ jobs:
     timeout-minutes: 90
     env:
       NODE_OPTIONS: --max-old-space-size=4096
-      ORCA_LOCAL_BUILD_VERSION: 1.4.188-webglfix.1
-      RELEASE_TAG: v1.4.188-webglfix.1
-      RELEASE_NAME: Orca 1.4.188 WebGL Fix 1
+      ORCA_LOCAL_BUILD_VERSION: 1.4.194-webglfix.1
+      RELEASE_TAG: v1.4.194-webglfix.1
+      RELEASE_NAME: Orca 1.4.194 WebGL Fix 1
 
     steps:
       - name: Checkout
@@ -102,7 +102,7 @@ jobs:
           $installer = 'dist/orca-windows-setup.exe'
           $hash = (Get-FileHash -Algorithm SHA256 $installer).Hash
           $notes = @"
-          这是基于官方 Orca 最新 main（含 v1.4.188 及之后提交）的 Windows x64 预发行修复包，保留本 fork 的 WebGL / Windows 浏览器自动化修复。
+          这是基于官方 Orca 最新 main（含 v1.4.194 及之后提交）的 Windows x64 预发行修复包，保留本 fork 的 WebGL / Windows 浏览器自动化修复。
 
           相对官方最新：
           - 视口截图优先使用 Electron 原生捕获，避开 WebGL 页面上的 CDP 合成器死锁。
@@ -111,7 +111,7 @@ jobs:
           - 失效自动化会话重建，并换用唯一 helper session 名。
           - 修复 Windows 上 agent-browser 守护进程继承 stdout/stderr 导致冷启动命令不 close 的问题。
           - 为 browser.* RPC 增加 keepalive，且不占用长轮询额度。
-          - 同时保留官方 #15887 的 agent-browser windowsHide，避免控制台闪窗抢焦点。
+          - 同时保留官方 #15887 的 windowsHide 和 #16588 的 daemon 空闲超时。
 
           Commit: ${{ github.sha }}
           CI: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
