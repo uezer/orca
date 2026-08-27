@@ -472,7 +472,10 @@ export function classifyRuntimeLongPoll(request: RpcRequest): RuntimeLongPollCla
 }
 
 // Why: cold browser setup can exceed the 30 s pipe idle cap without being a metered long-poll.
-function requestNeedsKeepalive(request: RpcRequest, longPoll: LongPollClass | null): boolean {
+function requestNeedsKeepalive(
+  request: RpcRequest,
+  longPoll: RuntimeLongPollClass | null
+): boolean {
   return longPoll !== null || request.method.startsWith('browser.')
 }
 
