@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { execFileMock, execFileSyncMock } = vi.hoisted(() => ({
+const { execFileMock, execFileSyncMock, getAllProcessesMock } = vi.hoisted(() => ({
   execFileMock: vi.fn(),
+  getAllProcessesMock: vi.fn(),
   execFileSyncMock: vi.fn()
 }))
 
@@ -11,6 +12,7 @@ vi.mock('child_process', () => ({
 }))
 
 import { resetWindowsProcessRowsSnapshotForTests } from '../main/providers/windows-foreground-process-rows'
+import { __setWindowsProcessTreeLoaderForTests } from '../main/windows/windows-process-table'
 import { resetProcessTableSnapshotForTests } from '../shared/process-table-snapshot'
 import {
   getForegroundProcessName,
@@ -35,6 +37,21 @@ function mockExecFile(
   )
 }
 
+/**
+ * Feed the native Windows snapshot. A real snapshot always contains the
+ * querying process, and the reader rejects a table without it.
+ */
+function mockWindowsProcessTable(
+  rows: { pid: number; ppid: number; name: string; commandLine?: string }[]
+): void {
+  __setWindowsProcessTreeLoaderForTests(() => ({
+    ProcessDataFlag: { None: 0, Memory: 1, CommandLine: 2 },
+    getAllProcesses: (cb: (value: typeof rows | undefined) => void) =>
+      cb([{ pid: process.pid, ppid: 0, name: 'vitest.exe', commandLine: 'vitest' }, ...rows])
+  }))
+  getAllProcessesMock.mockClear()
+}
+
 async function withProcessPlatform<T>(
   platform: NodeJS.Platform,
   run: () => T | Promise<T>
@@ -56,6 +73,7 @@ beforeEach(() => {
   execFileSyncMock.mockReset()
   resetProcessTableSnapshotForTests()
   resetWindowsProcessRowsSnapshotForTests()
+  __setWindowsProcessTreeLoaderForTests()
 })
 
 describe('isProcessAlive', () => {
@@ -306,29 +324,15 @@ describe('getForegroundProcessName', () => {
 
   it('recognizes Windows SSH relay shell-rooted agent descendants', async () => {
     await withProcessPlatform('win32', async () => {
-      mockExecFile((command) => {
-        if (command === 'powershell.exe') {
-          return {
-            stdout: JSON.stringify([
-              {
-                CommandLine: 'powershell.exe',
-                ExecutablePath: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
-                Name: 'powershell.exe',
-                ParentProcessId: 99,
-                ProcessId: 100
-              },
-              {
-                CommandLine: 'node C:\\Users\\dev\\AppData\\Roaming\\npm\\codex.cmd',
-                ExecutablePath: 'C:\\Program Files\\nodejs\\node.exe',
-                Name: 'node.exe',
-                ParentProcessId: 100,
-                ProcessId: 101
-              }
-            ])
-          }
+      mockWindowsProcessTable([
+        { pid: 100, ppid: 99, name: 'powershell.exe', commandLine: 'powershell.exe' },
+        {
+          pid: 101,
+          ppid: 100,
+          name: 'node.exe',
+          commandLine: 'node C:\\Users\\dev\\AppData\\Roaming\\npm\\codex.cmd'
         }
-        return new Error('unexpected command')
-      })
+      ])
 
       await expect(getForegroundProcessName(100, 'powershell.exe')).resolves.toBe('codex')
     })
@@ -430,36 +434,11 @@ describe('getForegroundProcessName', () => {
 
   it('rescans a Windows pi fallback for its outer omp wrapper', async () => {
     await withProcessPlatform('win32', async () => {
-      mockExecFile((command) => {
-        if (command === 'powershell.exe') {
-          return {
-            stdout: JSON.stringify([
-              {
-                CommandLine: 'powershell.exe',
-                ExecutablePath: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
-                Name: 'powershell.exe',
-                ParentProcessId: 99,
-                ProcessId: 100
-              },
-              {
-                CommandLine: 'omp.exe',
-                ExecutablePath: 'C:\\Tools\\omp.exe',
-                Name: 'omp.exe',
-                ParentProcessId: 100,
-                ProcessId: 101
-              },
-              {
-                CommandLine: 'pi.exe',
-                ExecutablePath: 'C:\\Tools\\pi.exe',
-                Name: 'pi.exe',
-                ParentProcessId: 101,
-                ProcessId: 102
-              }
-            ])
-          }
-        }
-        return new Error('unexpected command')
-      })
+      mockWindowsProcessTable([
+        { pid: 100, ppid: 99, name: 'powershell.exe', commandLine: 'powershell.exe' },
+        { pid: 101, ppid: 100, name: 'omp.exe', commandLine: 'omp.exe' },
+        { pid: 102, ppid: 101, name: 'pi.exe', commandLine: 'pi.exe' }
+      ])
 
       await expect(getForegroundProcessName(100, 'pi')).resolves.toBe('omp')
     })
@@ -475,6 +454,39 @@ describe('getForegroundProcessName', () => {
       })
 
       await expect(getForegroundProcessName(100, 'pi')).resolves.toBe('pi')
+    })
+  })
+
+  it('normalizes a wrapper fallback the process table cannot confirm', async () => {
+    // Why: the table scan must answer null, not the raw node-pty name, so the
+    // ladder still publishes the RECOGNIZED (normalized) identity.
+    await withProcessPlatform('linux', async () => {
+      mockExecFile((_command, args) => {
+        if (args[0] === '-axo') {
+          return { stdout: ['100 99 Ss   bash -l', '101 100 S+   vim notes.txt'].join('\n') }
+        }
+        return new Error('unexpected command')
+      })
+
+      await expect(getForegroundProcessName(100, '/opt/homebrew/bin/pi')).resolves.toBe('pi')
+    })
+  })
+
+  it('resolves a duplicated root pid to the FIRST capture row', async () => {
+    // Preserve rows.find() semantics if a malformed table repeats a pid: an argv
+    // newline makes `ps` print a continuation line that can parse as a spurious
+    // row, so the real root (row one) must keep owning the pane's foreground.
+    await withProcessPlatform('linux', async () => {
+      mockExecFile((_command, args) => {
+        if (args[0] === '-axo') {
+          return {
+            stdout: ['100 1 Ss bash', '100 1 Ss+ bash', '101 100 S node /opt/codex'].join('\n')
+          }
+        }
+        return new Error('unexpected command')
+      })
+
+      await expect(getForegroundProcessName(100, 'bash')).resolves.toBe('codex')
     })
   })
 

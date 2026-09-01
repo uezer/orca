@@ -89,7 +89,10 @@ import type { BrowserTab as BrowserTabState } from '../../../../shared/browser-w
 import type { Tab } from '../../../../shared/tab-types'
 import type { TerminalTab } from '../../../../shared/terminal-tab-types'
 import { resolveUnifiedTabLabel } from '../../../../shared/tab-title-resolution'
+import { isProvenProcessExit } from '../../../../shared/terminal-exit-cause'
 import { FloatingBrowserSlot } from './FloatingBrowserSlot'
+import { FloatingWorkspaceTabDragContext } from './FloatingWorkspaceTabDragContext'
+import { isFloatingTerminalDragTarget } from './floating-terminal-titlebar-drag-target'
 import { FloatingTerminalOrchestrationDialog } from './FloatingTerminalOrchestrationDialog'
 import { FloatingTerminalResizeHandles } from './FloatingTerminalResizeHandles'
 import { FloatingTerminalWindowControls } from './FloatingTerminalWindowControls'
@@ -153,18 +156,12 @@ type FloatingPanelShortcutResolution =
   | { kind: 'index'; index: number }
   | { kind: 'chrome'; action: KeybindingActionId }
 
-const FLOATING_TERMINAL_NO_DRAG_SELECTOR =
-  'button,input,textarea,select,[role="menuitem"],[data-testid="sortable-tab"],[data-floating-terminal-no-drag]'
 const FLOATING_TERMINAL_SHORTCUT_SURFACE_SELECTOR = '[data-floating-terminal-shortcut-surface]'
 
 type FloatingTerminalPanelBoundsState = {
   committedBounds: FloatingTerminalPanelCommittedBounds
   renderedBounds: FloatingTerminalPanelBounds
   source: FloatingTerminalPanelBoundsSource
-}
-
-function isFloatingTerminalDragTarget(target: EventTarget): boolean {
-  return !(target instanceof HTMLElement && target.closest(FLOATING_TERMINAL_NO_DRAG_SELECTOR))
 }
 
 function readInitialPanelBounds(): FloatingTerminalPanelBoundsState {
@@ -896,8 +893,8 @@ export function FloatingTerminalPanel({
         if (item.contentType === 'terminal') {
           closeTab(item.entityId, { reason: 'cleanup' })
         } else if (item.contentType === 'browser') {
-          destroyWorkspaceWebviews(state.browserPagesByWorkspace, item.entityId)
           closeBrowserTab(item.entityId)
+          destroyWorkspaceWebviews(state.browserPagesByWorkspace, item.entityId)
         } else if (item.contentType === 'simulator') {
           closeUnifiedTab(item.id)
         } else {
@@ -952,8 +949,8 @@ export function FloatingTerminalPanel({
         onClose: () => {
           const latest = useAppStore.getState()
           if (item.contentType === 'browser') {
-            destroyWorkspaceWebviews(latest.browserPagesByWorkspace, item.entityId)
             closeBrowserTab(item.entityId)
+            destroyWorkspaceWebviews(latest.browserPagesByWorkspace, item.entityId)
           } else if (item.contentType === 'simulator') {
             closeUnifiedTab(item.id)
           } else {
@@ -1825,7 +1822,7 @@ export function FloatingTerminalPanel({
           onPointerCancel={handleDragEnd}
           onDoubleClick={handleTitlebarDoubleClick}
         >
-          <div className="flex h-full min-w-0 flex-1">
+          <FloatingWorkspaceTabDragContext enabled={open}>
             <TabBar
               tabs={terminalItems}
               activeTabId={activeTerminalId}
@@ -1874,7 +1871,7 @@ export function FloatingTerminalPanel({
               tabBarOrder={tabBarOrder}
               tabStripChrome="floating-panel"
             />
-          </div>
+          </FloatingWorkspaceTabDragContext>
           <FloatingTerminalWindowControls
             maximized={maximized}
             onToggleMaximized={toggleMaximized}
@@ -1916,7 +1913,11 @@ export function FloatingTerminalPanel({
                         // atlas to corrupt) while hidden, and the resume on
                         // reopen rebuilds the renderer from scratch.
                         isVisible={isActive && open}
-                        onPtyExit={(ptyId) => {
+                        onPtyExit={(ptyId, exitCode) => {
+                          if (exitCode !== undefined && !isProvenProcessExit(exitCode)) {
+                            useAppStore.getState().markUnverifiedPtyLoss(tab.id)
+                            return
+                          }
                           if (shouldDeferParkedPtyExitTabClose(tab.id, ptyId)) {
                             return
                           }

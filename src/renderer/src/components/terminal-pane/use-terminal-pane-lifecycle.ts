@@ -26,6 +26,7 @@ import { buildTerminalKeyboardProtocolOptions } from '@/lib/pane-manager/termina
 import { resolvePaneKeyboardProtocolAgent } from './terminal-keyboard-protocol-pane-agent'
 import { useAppStore } from '@/store'
 import type { DirectSshPaneRetryAttemptId } from '@/store/slices/direct-ssh-terminal-recovery'
+import type { PaneProcessExit } from './pty-connection-types'
 import {
   createFilePathLinkProvider,
   getTerminalFileOpenHint,
@@ -56,7 +57,10 @@ import {
   type HttpLinkSourceOwner
 } from '@/lib/http-link-routing'
 import { resolveTerminalHttpLinkSourceOwner } from './terminal-http-link-source-owner'
-import { canOpenWorkspaceBrowserTabOnRuntime } from '@/lib/workspace-browser-tab-open'
+import {
+  canOpenWorkspaceBrowserTabOnRuntime,
+  canOpenWorkspaceBrowserTabOnSsh
+} from '@/lib/workspace-browser-tab-open'
 import type { GlobalSettings } from '../../../../shared/global-settings-types'
 import type { TerminalLayoutSnapshot, TerminalTab } from '../../../../shared/terminal-tab-types'
 import type { TuiAgent } from '../../../../shared/tui-agent'
@@ -94,6 +98,8 @@ import {
   resolveNonLatinControlChordInput
 } from './terminal-non-latin-control-chord'
 import { installTerminalImeCompositionTracker } from './terminal-ime-composition-tracker'
+import { installTerminalImeComposerPlaceholderMask } from './terminal-ime-composer-placeholder-mask'
+import { isCurrentPlatformIosWeb } from '@/lib/ios-web-platform'
 import { installTerminalImeLinuxCandidateState } from './terminal-ime-linux-candidate-state'
 import {
   armTerminalImePendingCandidateKeyRelease,
@@ -102,6 +108,8 @@ import {
   shouldApplyTerminalImePendingCandidateKeyRelease
 } from './terminal-ime-candidate-key-release-guard'
 import { installTerminalImeNativeTextForwarder } from './terminal-ime-native-text-forwarder'
+import { installTerminalIosHangulPreedit } from './terminal-ios-hangul-preedit'
+import { createTerminalIosHangulPreeditRenderer } from './terminal-ios-hangul-preedit-overlay'
 import {
   shouldBypassXtermKeyboardEvent,
   shouldHandleTerminalInterruptKeyboardEvent,
@@ -111,7 +119,12 @@ import {
   shouldSuppressTerminalModifierKeyboardEvent,
   TERMINAL_INTERRUPT_INPUT
 } from './xterm-bypass-policy'
-import type { PaneCwdMap } from './resolve-split-cwd'
+import {
+  mergePaneCwdFromOsc7,
+  settlePaneCwdDeferredSpawn,
+  type PaneCwdMap
+} from './resolve-split-cwd'
+import type { PtyPreconnectInputEntry } from './pty-preconnect-input-buffer'
 import { installMouseHideWhileTyping } from './mouse-hide-while-typing'
 import type { EffectiveMacOptionAsAlt } from '@/lib/keyboard-layout/detect-option-as-alt'
 import { connectPanePty } from './pty-connection'
@@ -124,6 +137,7 @@ import {
 import { getConnectionId } from '@/lib/connection-context'
 import { resolvePaneWslDistro } from './terminal-pane-wsl-distro'
 import { getExecutionHostIdForWorktree } from '@/lib/worktree-runtime-owner'
+import { isTerminalTabPresent } from '@/store/slices/terminal-tab-retirement'
 import { isPaneReplaying, type ReplayingPanesRef } from './replay-guard'
 import { canReleaseReplayedScrollbackFromStore } from './replayed-scrollback-store-release'
 import { fitAndFocusPanes, fitPanes } from './pane-helpers'
@@ -139,16 +153,24 @@ import {
   setPrimarySelectionText
 } from '@/lib/primary-selection'
 import {
-  SPLIT_TERMINAL_PANE_EVENT,
   CLOSE_TERMINAL_PANE_EVENT,
   WAKE_HIBERNATED_AGENTS_WORKTREE_EVENT,
-  type SplitTerminalPaneDetail,
   type CloseTerminalPaneDetail,
   type WakeHibernatedAgentsWorktreeDetail
 } from '@/constants/terminal'
 import { acquireWebviewsDragPassthrough } from '../browser-pane/host-guest/webview-registry'
 import { recordCreatedTerminalPaneSplit } from './terminal-pane-split-completion'
 import { closeTerminalTab } from '../terminal/terminal-tab-actions'
+import {
+  appendDeferredSplitPaneInput,
+  beginDeferredSplitPaneHandoff,
+  claimDeferredSplitPaneHandoff,
+  clearDeferredSplitPaneHandoff,
+  discardDeferredSplitPaneHandoffForKey,
+  discardDeferredSplitPaneHandoffsForTab,
+  releaseDeferredSplitPaneHandoff,
+  type DeferredSplitPaneHandoffHandle
+} from './deferred-split-pane-handoff'
 import {
   seedStartupSessionRestoredBanner,
   type SessionRestoredBannerReason
@@ -157,6 +179,11 @@ import {
   resolveTabTitleAfterPaneClose,
   shouldClearLaunchAgentForClosedPane
 } from './terminal-pane-close-identity'
+import {
+  cancelQueuedTerminalPaneSplitRequests,
+  registerTerminalPaneSplitRequestHandler,
+  resolveTerminalPaneSplitSourceId
+} from './terminal-pane-split-request-routing'
 
 export function resetTerminalKeyboardProtocolAfterInterrupt(terminal: Terminal): void {
   // Guarded output path so a throwing xterm can't escape the key handler.
@@ -289,9 +316,11 @@ type UseTerminalPaneLifecycleDeps = {
   replayingPanesRef: ReplayingPanesRef
   isActiveRef: React.RefObject<boolean>
   isVisibleRef: React.RefObject<boolean>
-  onPtyExitRef: React.RefObject<(ptyId: string) => void>
+  onPtyExitRef: React.RefObject<(ptyId: string, exitCode?: number) => void>
   onAgentExitedRef: React.RefObject<(leafId: string) => void>
   onPtyErrorRef?: React.RefObject<(paneId: number, message: string) => void>
+  onPtyErrorClearedRef?: React.RefObject<(paneId: number, message?: string) => void>
+  onPaneProcessDied?: (processExit: PaneProcessExit) => void
   onPtyRecoveryStateRef?: React.RefObject<
     (paneId: number, state: PtyTransportRecoveryState | null) => void
   >
@@ -323,7 +352,15 @@ type UseTerminalPaneLifecycleDeps = {
   }) => void
   setCacheTimerStartedAt: (key: string, ts: number | null) => void
   syncPanePtyLayoutBinding: (paneId: number, ptyId: string | null) => void
+  syncPanePtyLayoutBindingForLeaf?: (
+    leafId: string,
+    ptyId: string | null,
+    sourcePaneId: number
+  ) => void
   clearExitedPanePtyLayoutBinding: (paneId: number, exitedPtyId: string) => void
+  clearExitedPanePtyLayoutBindingForLeaf?: (leafId: string, exitedPtyId: string) => void
+  /** Settles the captured one-shot startup only after a pane owns a concrete PTY. */
+  onStartupBound?: () => void
   setTabPaneExpanded: (tabId: string, expanded: boolean) => void
   setTabCanExpandPane: (tabId: string, canExpand: boolean) => void
   setExpandedPane: (paneId: number | null) => void
@@ -451,13 +488,6 @@ export function resolvePaneSeedCwd(splitPaneCwd: string | undefined, fallbackCwd
   return splitPaneCwd ?? fallbackCwd
 }
 
-// Why > 1, matching isIOSWebView in mobile/src/terminal/terminal-webview-html.ts: a Mac with a
-// touch peripheral can report exactly 1, and it must keep the forwarder. Real iPads report 5.
-// Why UA rather than that helper's platform check: an iPhone reports platform "iPhone", not "MacIntel".
-export function isTouchIOSUserAgent(userAgent: string, maxTouchPoints: number): boolean {
-  return userAgent.includes('Mac') && maxTouchPoints > 1
-}
-
 type SplitStartupPayload = { command: string; env?: Record<string, string> }
 
 type SplitWithStartupDeps = {
@@ -476,6 +506,55 @@ function resolveTerminalHomePathFromEnv(env: Record<string, string> | undefined)
   const homeDrive = env?.HOMEDRIVE?.trim()
   const homePath = env?.HOMEPATH?.trim()
   return homeDrive && homePath ? `${homeDrive}${homePath}` : null
+}
+
+/**
+ * Whether this pane's startup is the tab's queued command rather than a payload a split borrowed.
+ *
+ * Why reference identity and not truthiness: setup/issue splits assign their own one-shot object to
+ * the same `deps.startup` field, so "has a startup" would let a split pane spend a command it never
+ * runs — and a split's payload can be structurally identical to the queued one (STA-4876).
+ */
+export function paneOwnsQueuedStartup(
+  paneStartup: object | null | undefined,
+  queuedStartup: object | null | undefined
+): boolean {
+  return queuedStartup != null && paneStartup === queuedStartup
+}
+
+/**
+ * The callback that spends the tab's queued startup command, or `undefined` when this pane does
+ * not own it.
+ *
+ * Why one-shot: `onPtySpawn` fires on every fresh spawn a pane makes — hibernation wake, the
+ * respawn ladder — but only the first carried the queued command. A command queued onto the tab
+ * afterwards belongs to that later launch, and spending it here would drop it undelivered.
+ *
+ * Why `isStillQueued` on top of that guard: the replacement can also arrive before this pane's very
+ * first spawn, so the slot is only spent while it still holds the command this pane launched.
+ */
+export function createQueuedStartupConsumer(
+  paneStartup: object | null | undefined,
+  queuedStartup: object | null | undefined,
+  consume: () => void,
+  isStillQueued: () => boolean
+): (() => void) | undefined {
+  if (!paneOwnsQueuedStartup(paneStartup, queuedStartup)) {
+    return undefined
+  }
+  let spent = false
+  return () => {
+    if (spent) {
+      return
+    }
+    // Why spent regardless: this pane's launch is its one chance at the slot; a later spawn of the
+    // same pane must not spend whatever command took its place.
+    spent = true
+    if (!isStillQueued()) {
+      return
+    }
+    consume()
+  }
 }
 
 /** Scopes `deps.startup` to a single call of `splitPane()`, clearing it in `finally` so later splits do not replay the payload. */
@@ -593,6 +672,7 @@ export function applyTerminalPaneCloseRequest(args: {
 
 export function retireMountedTerminalPaneSurface(args: {
   paneKey: string
+  leafId: string
   paneId: number
   tabId: string
   ptyId: string | null
@@ -601,17 +681,36 @@ export function retireMountedTerminalPaneSurface(args: {
     options?: { preserveSleepingAgentSession?: boolean }
   ) => void
   syncPanePtyLayoutBinding: (paneId: number, ptyId: string | null) => void
+  syncPanePtyLayoutBindingForLeaf?: (
+    leafId: string,
+    ptyId: string | null,
+    sourcePaneId: number
+  ) => void
+  clearExitedPanePtyLayoutBindingForLeaf?: (leafId: string, exitedPtyId: string) => void
   clearTabPtyId: (tabId: string, ptyId: string) => void
-  transport?: { detach?: () => void; destroy?: () => void }
+  transport?: {
+    detach?: (options?: { preserveExitObserver?: boolean }) => void
+    destroy?: () => void
+  }
 }): void {
   args.retireAgentPaneAuthority(args.paneKey, {
     preserveSleepingAgentSession: true
   })
   if (args.ptyId) {
-    args.syncPanePtyLayoutBinding(args.paneId, null)
+    if (args.clearExitedPanePtyLayoutBindingForLeaf) {
+      // Match the old PTY before clearing so an overlapping successor cannot lose its binding.
+      args.clearExitedPanePtyLayoutBindingForLeaf(args.leafId, args.ptyId)
+    } else if (args.syncPanePtyLayoutBindingForLeaf) {
+      args.syncPanePtyLayoutBindingForLeaf(args.leafId, null, args.paneId)
+    } else {
+      args.syncPanePtyLayoutBinding(args.paneId, null)
+    }
     args.clearTabPtyId(args.tabId, args.ptyId)
   }
-  args.transport?.detach?.()
+  // preserveExitObserver:false — a retired surface keeps its PTY alive but starts no parked
+  // watcher, so a preserved observer would pin the disposed pane's xterm for the whole session
+  // (the entries only die on real PTY exit). The buffered exit drains into a successor mount.
+  args.transport?.detach?.({ preserveExitObserver: false })
 }
 
 /** Wires mounted terminal panes to renderer state and terminal event handling. */
@@ -649,6 +748,8 @@ export function useTerminalPaneLifecycle({
   onPtyExitRef,
   onAgentExitedRef,
   onPtyErrorRef,
+  onPtyErrorClearedRef,
+  onPaneProcessDied,
   onPtyRecoveryStateRef,
   clearTabPtyId,
   consumeSuppressedPtyExit,
@@ -667,7 +768,10 @@ export function useTerminalPaneLifecycle({
   dispatchNotification,
   setCacheTimerStartedAt,
   syncPanePtyLayoutBinding,
+  syncPanePtyLayoutBindingForLeaf,
   clearExitedPanePtyLayoutBinding,
+  clearExitedPanePtyLayoutBindingForLeaf,
+  onStartupBound,
   setTabPaneExpanded,
   setTabCanExpandPane,
   setExpandedPane,
@@ -748,6 +852,23 @@ export function useTerminalPaneLifecycle({
     const mouseHideDisposables = mouseHideDisposablesRef.current
     const imeCompositionDisposables = imeCompositionDisposablesRef.current
     const imeNativeTextForwarderDisposables = imeNativeTextForwarderDisposablesRef.current
+    // Numeric pane ids are mount-local; the handle itself is keyed by the
+    // durable tab/leaf identity so a whole-tab remount can reclaim it.
+    const deferredSplitHandoffs = new Map<number, DeferredSplitPaneHandoffHandle>()
+    // A concrete PTY owns the input queue and settles the split admission fence,
+    // so the deferred lookup stops being reusable. Both layout-binding variants
+    // must run this: main routes live binds through the leaf-keyed one.
+    const settleDeferredSplitOnBind = (paneId: number, ptyId: string | null): void => {
+      if (!ptyId) {
+        return
+      }
+      const deferredSplitHandoff = deferredSplitHandoffs.get(paneId)
+      if (deferredSplitHandoff) {
+        clearDeferredSplitPaneHandoff(deferredSplitHandoff)
+        deferredSplitHandoffs.delete(paneId)
+      }
+      settlePaneCwdDeferredSpawn(paneCwdRef.current, paneId)
+    }
     const worktreePath =
       useAppStore
         .getState()
@@ -771,14 +892,21 @@ export function useTerminalPaneLifecycle({
       resolvePaneLinkCwd(paneCwdRef.current, paneId, startupCwd)
     const getHttpLinkSourceOwnerForPane = (paneId: number) =>
       resolveTerminalHttpLinkSourceOwner(paneTransportsRef.current.get(paneId))
-    const canOpenRuntimeBrowserForPane = (paneId: number): boolean => {
+    const canOpenOwnedBrowserForPane = (paneId: number): boolean => {
       const sourceOwner = getHttpLinkSourceOwnerForPane(paneId)
-      return (
-        sourceOwner.kind === 'runtime' &&
-        canOpenWorkspaceBrowserTabOnRuntime(
+      if (sourceOwner.kind === 'runtime') {
+        return canOpenWorkspaceBrowserTabOnRuntime(
           useAppStore.getState(),
           worktreeId,
           sourceOwner.runtimeEnvironmentId
+        )
+      }
+      return (
+        sourceOwner.kind === 'ssh' &&
+        canOpenWorkspaceBrowserTabOnSsh(
+          useAppStore.getState(),
+          worktreeId,
+          sourceOwner.connectionId
         )
       )
     }
@@ -787,7 +915,7 @@ export function useTerminalPaneLifecycle({
       return terminalHttpLinkActionDestinationsFor(
         settingsRef.current,
         sourceOwner,
-        canOpenRuntimeBrowserForPane(paneId)
+        canOpenOwnedBrowserForPane(paneId)
       )
     }
     const getLinkActionContext = (paneId: number): TerminalLinkActionContext | null => {
@@ -891,6 +1019,8 @@ export function useTerminalPaneLifecycle({
       onPtyExitRef,
       onAgentExitedRef,
       onPtyErrorRef,
+      onPtyErrorClearedRef,
+      onPaneProcessDied,
       onPtyRecoveryStateRef,
       clearTabPtyId,
       consumeSuppressedPtyExit,
@@ -908,8 +1038,25 @@ export function useTerminalPaneLifecycle({
       onShowSessionRestoredBanner,
       dispatchNotification,
       setCacheTimerStartedAt,
-      syncPanePtyLayoutBinding,
+      syncPanePtyLayoutBinding: (paneId: number, ptyId: string | null) => {
+        settleDeferredSplitOnBind(paneId, ptyId)
+        syncPanePtyLayoutBinding(paneId, ptyId)
+      },
+      ...(syncPanePtyLayoutBindingForLeaf
+        ? {
+            syncPanePtyLayoutBindingForLeaf: (
+              leafId: string,
+              ptyId: string | null,
+              sourcePaneId: number
+            ) => {
+              settleDeferredSplitOnBind(sourcePaneId, ptyId)
+              syncPanePtyLayoutBindingForLeaf(leafId, ptyId, sourcePaneId)
+            }
+          }
+        : {}),
       clearExitedPanePtyLayoutBinding,
+      clearExitedPanePtyLayoutBindingForLeaf,
+      onStartupBound,
       deferPtyInput: (paneId, data, forward) => {
         const suppression = httpLinkClickFallbackDisposables.get(paneId)?.ptyMouseSuppression
         if (!suppression) {
@@ -942,7 +1089,7 @@ export function useTerminalPaneLifecycle({
         ...terminalUrlOpenHintOptionsFor(
           settingsRef.current,
           getHttpLinkSourceOwnerForPane(paneId),
-          canOpenRuntimeBrowserForPane(paneId)
+          canOpenOwnedBrowserForPane(paneId)
         ),
         showActions: settingsRef.current?.terminalLinkActionPopoverEnabled !== false
       })
@@ -951,8 +1098,35 @@ export function useTerminalPaneLifecycle({
     let releaseWebviewDragPassthrough: (() => void) | null = null
 
     const manager = new PaneManager(container, {
-      // `spawnHints.cwd` (from Split actions) lets the new PTY inherit the source pane's cwd — see docs/ssh-split-pane-inherit-cwd.md.
+      // Split spawn hints let the renderer pane appear before a slow inherited-cwd lookup finishes.
       onPaneCreated: (pane, spawnHints) => {
+        const paneKey = makePaneKey(tabId, pane.leafId)
+        const restoredPtyId = ptyDeps.restoredPtyIdByLeafId?.[pane.leafId]
+        const hasAuthoritativeSpawnHint = Boolean(
+          spawnHints?.cwd || spawnHints?.ptyId || restoredPtyId
+        )
+        let effectiveSpawnHints = spawnHints
+        let claimedDeferredSplitHandoff: ReturnType<typeof claimDeferredSplitPaneHandoff> = null
+        let deferredSplitHandoff: DeferredSplitPaneHandoffHandle | undefined
+        if (spawnHints?.cwdPromise && !hasAuthoritativeSpawnHint) {
+          deferredSplitHandoff = beginDeferredSplitPaneHandoff(paneKey, spawnHints.cwdPromise)
+          deferredSplitHandoffs.set(pane.id, deferredSplitHandoff)
+        } else if (!hasAuthoritativeSpawnHint) {
+          claimedDeferredSplitHandoff = claimDeferredSplitPaneHandoff(paneKey)
+          if (claimedDeferredSplitHandoff) {
+            deferredSplitHandoff = claimedDeferredSplitHandoff.handle
+            deferredSplitHandoffs.set(pane.id, deferredSplitHandoff)
+            effectiveSpawnHints = {
+              ...spawnHints,
+              cwdPromise: claimedDeferredSplitHandoff.cwdPromise
+            }
+          }
+        } else {
+          // A restored PTY or explicit spawn hint is authoritative; an older
+          // deferred record must not be claimed by a later remount.
+          discardDeferredSplitPaneHandoffForKey(paneKey)
+        }
+        const handoffForInput = deferredSplitHandoff
         // OSC 52 — TUI-initiated clipboard writes (Zellij/tmux/nvim/fzf/ssh).
         // Why: read settingsRef at fire time so mid-session gate toggles apply; return true in both paths so xterm doesn't fall through.
         const osc52Disposable = pane.terminal.parser.registerOscHandler(
@@ -972,11 +1146,39 @@ export function useTerminalPaneLifecycle({
 
         // OSC 7 — shell-reported cwd; drives split-pane cwd inheritance. Install MUST stay before connectPanePty:
         // cold-restore replays PTY output synchronously from the first read, so a later handler misses the first OSC 7.
-        if (!paneCwdRef.current.has(pane.id)) {
+        const existingPaneCwd = paneCwdRef.current.get(pane.id)
+        if (!existingPaneCwd) {
           paneCwdRef.current.set(pane.id, {
-            cwd: resolvePaneSeedCwd(spawnHints?.cwd, ptyDeps.cwd),
-            confirmed: false
+            cwd: resolvePaneSeedCwd(effectiveSpawnHints?.cwd, ptyDeps.cwd),
+            confirmed: false,
+            ...(effectiveSpawnHints?.cwdPromise
+              ? { deferredSplitSpawn: true, pendingCwd: effectiveSpawnHints.cwdPromise }
+              : {})
           })
+        } else if (effectiveSpawnHints?.cwdPromise && !existingPaneCwd.confirmed) {
+          paneCwdRef.current.set(pane.id, {
+            ...existingPaneCwd,
+            deferredSplitSpawn: true,
+            pendingCwd: effectiveSpawnHints.cwdPromise
+          })
+        }
+        if (effectiveSpawnHints?.cwdPromise) {
+          const cwdPromise = effectiveSpawnHints.cwdPromise
+          // A rejected lookup keeps the seed cwd; either way the settled identity
+          // stays until bind/failure so a stale cleanup cannot clear a newer lookup.
+          const applySettledCwd = (cwd: string | null): void => {
+            const current = paneCwdRef.current.get(pane.id)
+            if (!current || current.confirmed || current.pendingCwd !== cwdPromise) {
+              return
+            }
+            paneCwdRef.current.set(pane.id, {
+              cwd: cwd ?? current.cwd,
+              confirmed: false,
+              ...(current.deferredSplitSpawn ? { deferredSplitSpawn: true } : {}),
+              pendingCwd: cwdPromise
+            })
+          }
+          void cwdPromise.then(applySettledCwd, () => applySettledCwd(null))
         }
         const osc7Disposable = pane.terminal.parser.registerOscHandler(
           7,
@@ -984,7 +1186,10 @@ export function useTerminalPaneLifecycle({
             const parsedCwd = parseOsc7(data, { uncHost: osc7UncHost })
             if (parsedCwd) {
               const confirmed = !isPaneReplaying(replayingPanesRef, pane.id)
-              paneCwdRef.current.set(pane.id, { cwd: parsedCwd, confirmed })
+              paneCwdRef.current.set(
+                pane.id,
+                mergePaneCwdFromOsc7(paneCwdRef.current.get(pane.id), parsedCwd, confirmed)
+              )
             }
             return true
           })
@@ -1002,22 +1207,38 @@ export function useTerminalPaneLifecycle({
           !isMac &&
           navigator.userAgent.includes('Linux') &&
           !/Android|CrOS/.test(navigator.userAgent)
-        // Why: gates the forwarder only — isMac stays as-is for the Ctrl+C, clipboard, JIS-yen and 229 policies.
-        const isTouchIOS = isTouchIOSUserAgent(navigator.userAgent, navigator.maxTouchPoints)
+        // Why: gates the iOS text-edit paths only — isMac stays as-is for the Ctrl+C, clipboard, JIS-yen and 229 policies.
+        const isIosWeb = isCurrentPlatformIosWeb()
         const linuxImeCandidateState = isLinux
           ? installTerminalImeLinuxCandidateState(pane.terminal.element)
           : null
         const imeCompositionTracker = installTerminalImeCompositionTracker(pane.terminal.element)
+        const imeComposerPlaceholderMask = installTerminalImeComposerPlaceholderMask(pane.terminal)
+        // Why after the tracker: the preedit stops propagation on `input` while
+        // a syllable is held, so anything on this element that needs those
+        // events has to be registered ahead of it. Nothing does today — the
+        // preedit reads composition ownership off the event itself.
+        const iosHangulPreedit = isIosWeb
+          ? installTerminalIosHangulPreedit({
+              terminalElement: pane.terminal.element,
+              isCompositionActive: () => imeCompositionTracker.isActive(),
+              isScreenReaderMode: () => pane.terminal.options.screenReaderMode === true,
+              sendInput: (data) => pane.terminal.input(data),
+              renderPreedit: createTerminalIosHangulPreeditRenderer(pane.terminal)
+            })
+          : null
         imeCompositionDisposablesRef.current.set(pane.id, {
           dispose: () => {
+            imeComposerPlaceholderMask.dispose()
             imeCompositionTracker.dispose()
             linuxImeCandidateState?.dispose()
+            iosHangulPreedit?.dispose()
           }
         })
         // Why: macOS commits an input source's substituted text through the input event alone, so printable keydowns must not reach xterm's encoder.
         // Not on touch iOS/iPadOS: the forwarder stands aside for IME input via composition events, which iPad Hangul appears not to fire (#13345).
         const imeNativeTextForwarder =
-          isMac && !isTouchIOS
+          isMac && !isIosWeb
             ? installTerminalImeNativeTextForwarder({
                 terminalElement: pane.terminal.element,
                 isComposing: () => imeCompositionTracker.isActive(),
@@ -1157,6 +1378,7 @@ export function useTerminalPaneLifecycle({
 
           const shouldBypass = shouldBypassXtermKeyboardEvent(e, {
             isMac,
+            isIosWeb,
             hasSelection: pane.terminal.hasSelection(),
             kittyKeyboardFlags: paneKittyKeyboardModesRef.current.get(pane.id)?.flags ?? 0
           })
@@ -1295,14 +1517,51 @@ export function useTerminalPaneLifecycle({
           }
         }
         applyAppearance(manager)
+        const onQueuedStartupSpawned = createQueuedStartupConsumer(
+          ptyDeps.startup,
+          startupWithSetupSplitWait,
+          () => useAppStore.getState().consumeTabStartupCommand(tabId),
+          // Why `startup` and not startupWithSetupSplitWait: setup-split hands the pane a copy, so only
+          // the raw prop still matches the object the store holds. Read and consume run in one
+          // synchronous step, so nothing can queue in between.
+          () => useAppStore.getState().pendingStartupByTabId[tabId] === startup
+        )
         const panePtyBinding = connectPanePty(pane, manager, {
           ...ptyDeps,
+          ...(onQueuedStartupSpawned ? { onQueuedStartupSpawned } : {}),
+          ...(effectiveSpawnHints?.cwdPromise
+            ? {
+                onDeferredCwdSpawnFailed: () => {
+                  settlePaneCwdDeferredSpawn(
+                    paneCwdRef.current,
+                    pane.id,
+                    effectiveSpawnHints.cwdPromise
+                  )
+                  if (handoffForInput) {
+                    clearDeferredSplitPaneHandoff(handoffForInput)
+                    deferredSplitHandoffs.delete(pane.id)
+                  }
+                }
+              }
+            : {}),
+          ...(handoffForInput
+            ? {
+                onPreconnectInput: (input: PtyPreconnectInputEntry) =>
+                  appendDeferredSplitPaneInput(handoffForInput, input)
+              }
+            : {}),
+          ...(claimedDeferredSplitHandoff?.preconnectInput.length
+            ? { preconnectInput: claimedDeferredSplitHandoff.preconnectInput }
+            : {}),
           // Why: spread order matters — spawnHints.cwd (source pane) must override ptyDeps.cwd (worktree root) so splits boot in the live cwd.
-          ...(spawnHints?.cwd ? { cwd: spawnHints.cwd } : {}),
-          restoredPtyIdByLeafId: spawnHints?.ptyId
+          ...(effectiveSpawnHints?.cwd ? { cwd: effectiveSpawnHints.cwd } : {}),
+          ...(effectiveSpawnHints?.cwdPromise
+            ? { cwdPromise: effectiveSpawnHints.cwdPromise }
+            : {}),
+          restoredPtyIdByLeafId: effectiveSpawnHints?.ptyId
             ? {
                 ...ptyDeps.restoredPtyIdByLeafId,
-                [pane.leafId]: spawnHints.ptyId
+                [pane.leafId]: effectiveSpawnHints.ptyId
               }
             : ptyDeps.restoredPtyIdByLeafId,
           restoredLeafId: pane.leafId
@@ -1412,14 +1671,28 @@ export function useTerminalPaneLifecycle({
           panePtyBindings.delete(paneId)
         }
         const leafId = closedPane?.leafId
+        const deferredSplitHandoff = deferredSplitHandoffs.get(paneId)
+        if (deferredSplitHandoff) {
+          // Explicit pane removal is terminal for the split intent; only a
+          // whole-tab remount is allowed to retain this record.
+          clearDeferredSplitPaneHandoff(deferredSplitHandoff)
+          deferredSplitHandoffs.delete(paneId)
+        } else if (leafId) {
+          // A close callback can outlive its mount-local numeric handle; the
+          // durable leaf key still identifies the deferred split to discard.
+          discardDeferredSplitPaneHandoffForKey(makePaneKey(tabId, leafId))
+        }
         if (leafId && isRetiredSurface) {
           retireMountedTerminalPaneSurface({
             paneKey: makePaneKey(tabId, leafId),
+            leafId,
             paneId,
             tabId,
             ptyId: closedPtyId,
             retireAgentPaneAuthority: useAppStore.getState().retireAgentPaneAuthority,
             syncPanePtyLayoutBinding,
+            syncPanePtyLayoutBindingForLeaf,
+            clearExitedPanePtyLayoutBindingForLeaf,
             clearTabPtyId,
             ...(transport ? { transport } : {})
           })
@@ -1431,7 +1704,10 @@ export function useTerminalPaneLifecycle({
         if (transport && !isRetiredSurface) {
           if (isDetachedToTab) {
             // Why: detach hands the PTY to a new tab, so drop renderer listeners without process teardown.
-            transport.detach?.()
+            // preserveExitObserver:false for the same reason as unmount — the destination tab's
+            // registerExit re-owns the exit, and a preserved observer would pin this pane's xterm
+            // until then (forever if the destination never mounts).
+            transport.detach?.({ preserveExitObserver: false })
           } else {
             const ptyId = suppressIntentionalPaneCloseExit(
               transport,
@@ -1439,7 +1715,13 @@ export function useTerminalPaneLifecycle({
             )
             if (ptyId) {
               // Why: PaneManager already promoted the sibling; suppress this exit so the survivor isn't mistaken for an exited tab.
-              syncPanePtyLayoutBinding(paneId, null)
+              if (leafId && clearExitedPanePtyLayoutBindingForLeaf) {
+                clearExitedPanePtyLayoutBindingForLeaf(leafId, ptyId)
+              } else if (leafId) {
+                syncPanePtyLayoutBindingForLeaf?.(leafId, null, paneId)
+              } else {
+                syncPanePtyLayoutBinding(paneId, null)
+              }
               clearTabPtyId(tabId, ptyId)
             }
             transport.destroy?.()
@@ -1744,49 +2026,50 @@ export function useTerminalPaneLifecycle({
     scheduleRuntimeGraphSync()
 
     // Why: deliver the startup command via the PTY connection path (waits for shell readiness), not terminal.paste() which can lose input before the shell reads stdin.
-    function onCliSplitPane(event: Event): void {
-      const detail = (event as CustomEvent<SplitTerminalPaneDetail>).detail
-      if (!detail?.tabId || detail.tabId !== tabId) {
-        return
-      }
-      const mgr = managerRef.current
-      if (!mgr) {
-        return
-      }
-      if (detail.newLeafId && mgr.getNumericIdForLeaf(detail.newLeafId) !== null) {
-        return
-      }
-      const sourcePaneId = detail.sourceLeafId
-        ? (mgr.getNumericIdForLeaf(detail.sourceLeafId) ?? detail.paneRuntimeId)
-        : detail.paneRuntimeId
-      if (sourcePaneId < 0) {
-        return
-      }
-      const splitOptions = {
-        ...(detail.newLeafId ? { leafId: detail.newLeafId } : {}),
-        ...(detail.ptyId ? { ptyId: detail.ptyId } : {})
-      }
-      if (detail.command) {
-        const createdPane = splitPaneWithOneShotStartup(ptyDeps, { command: detail.command }, () =>
-          mgr.splitPane(sourcePaneId, detail.direction, splitOptions)
+    const unregisterTerminalPaneSplitRequestHandler = registerTerminalPaneSplitRequestHandler(
+      tabId,
+      worktreeId,
+      (detail) => {
+        const mgr = managerRef.current
+        if (!mgr) {
+          return
+        }
+        if (detail.newLeafId && mgr.getNumericIdForLeaf(detail.newLeafId) !== null) {
+          return
+        }
+        const sourcePaneId = resolveTerminalPaneSplitSourceId(detail, (leafId) =>
+          mgr.getNumericIdForLeaf(leafId)
         )
-        recordRuntimeCreatedTerminalPaneSplit(createdPane, {
-          source: detail.telemetrySource ?? 'command',
-          direction: detail.direction
-        })
-      } else {
-        const createdPane = mgr.splitPane(sourcePaneId, detail.direction, splitOptions)
-        const telemetrySuppressed = createdPane
-          ? consumePendingWebRuntimeSplitMirrorTelemetry(detail.sourcePtyId, detail.direction)
-          : false
-        recordRuntimeCreatedTerminalPaneSplit(createdPane, {
-          source: detail.telemetrySource ?? 'command',
-          direction: detail.direction,
-          telemetrySuppressed
-        })
+        if (sourcePaneId < 0) {
+          return
+        }
+        const splitOptions = {
+          ...(detail.newLeafId ? { leafId: detail.newLeafId } : {}),
+          ...(detail.ptyId ? { ptyId: detail.ptyId } : {})
+        }
+        if (detail.command) {
+          const createdPane = splitPaneWithOneShotStartup(
+            ptyDeps,
+            { command: detail.command },
+            () => mgr.splitPane(sourcePaneId, detail.direction, splitOptions)
+          )
+          recordRuntimeCreatedTerminalPaneSplit(createdPane, {
+            source: detail.telemetrySource ?? 'command',
+            direction: detail.direction
+          })
+        } else {
+          const createdPane = mgr.splitPane(sourcePaneId, detail.direction, splitOptions)
+          const telemetrySuppressed = createdPane
+            ? consumePendingWebRuntimeSplitMirrorTelemetry(detail.sourcePtyId, detail.direction)
+            : false
+          recordRuntimeCreatedTerminalPaneSplit(createdPane, {
+            source: detail.telemetrySource ?? 'command',
+            direction: detail.direction,
+            telemetrySuppressed
+          })
+        }
       }
-    }
-    window.addEventListener(SPLIT_TERMINAL_PANE_EVENT, onCliSplitPane)
+    )
 
     // Why: CLI-driven pane close goes via CustomEvent so PaneManager promotes a sibling; the last pane falls back to closing the tab.
     function onCliClosePane(event: Event): void {
@@ -1829,12 +2112,22 @@ export function useTerminalPaneLifecycle({
     window.addEventListener(CLOSE_TERMINAL_PANE_EVENT, onCliClosePane)
 
     return () => {
-      window.removeEventListener(SPLIT_TERMINAL_PANE_EVENT, onCliSplitPane)
+      unregisterTerminalPaneSplitRequestHandler()
       window.removeEventListener(CLOSE_TERMINAL_PANE_EVENT, onCliClosePane)
-      const currentWorktreeTabs = useAppStore.getState().tabsByWorktree[worktreeId]
-      const tabStillExists = Boolean(
+      const currentStore = useAppStore.getState()
+      const currentWorktreeTabs = currentStore.tabsByWorktree[worktreeId]
+      // Queued split cancellation stays worktree-scoped: a tab that merely moved
+      // buckets must still cancel this worktree's queue.
+      const tabRemainsInWorktree = Boolean(
         currentWorktreeTabs?.some((candidate) => candidate.id === tabId)
       )
+      if (!tabRemainsInWorktree) {
+        cancelQueuedTerminalPaneSplitRequests(tabId, worktreeId)
+      }
+      // Handoff retention is deliberately broader: a tab move removes the old
+      // worktree bucket before the replacement surface mounts, so use the shared
+      // global ownership check to let an ID-less deferred split survive a rehome.
+      const tabStillExists = isTerminalTabPresent(currentStore, tabId)
       unregisterRuntimeTab()
       if (resizeRaf !== null) {
         cancelAnimationFrame(resizeRaf)
@@ -1888,15 +2181,35 @@ export function useTerminalPaneLifecycle({
       captureParkedTerminalPaneCandidates(
         tabId,
         worktreeId,
-        manager.getPanes().map((capturedPane) => ({
-          ptyId: paneTransports.get(capturedPane.id)?.getPtyId() ?? null,
-          paneId: capturedPane.id,
-          leafId: capturedPane.leafId,
-          drivesTabTitle: manager.getActivePane()?.id === capturedPane.id
-        }))
+        manager.getPanes().map((capturedPane) => {
+          const capturedPtyId = paneTransports.get(capturedPane.id)?.getPtyId() ?? null
+          const capturedBinding = panePtyBindings.get(capturedPane.id) as
+            | (IDisposable & { isUntouchedFreshSpawnPty?: (ptyId: string) => boolean })
+            | undefined
+          return {
+            ptyId: capturedPtyId,
+            paneId: capturedPane.id,
+            leafId: capturedPane.leafId,
+            drivesTabTitle: manager.getActivePane()?.id === capturedPane.id,
+            untouchedFreshSpawn:
+              capturedPtyId !== null &&
+              (capturedBinding?.isUntouchedFreshSpawnPty?.(capturedPtyId) ?? false)
+          }
+        })
       )
-      for (const transport of paneTransports.values()) {
+      for (const [paneId, transport] of paneTransports) {
         const ptyId = transport.getPtyId()
+        const deferredSplitHandoff = deferredSplitHandoffs.get(paneId)
+        if (deferredSplitHandoff) {
+          if (tabStillExists && !ptyId) {
+            // Keep only the transient launch record; the old transport and
+            // xterm are still disposable during a whole-tab remount.
+            releaseDeferredSplitPaneHandoff(deferredSplitHandoff)
+          } else {
+            clearDeferredSplitPaneHandoff(deferredSplitHandoff)
+          }
+          deferredSplitHandoffs.delete(paneId)
+        }
         if (
           shouldDetachPaneTransportOnUnmount({
             tabStillExists,
@@ -1906,11 +2219,19 @@ export function useTerminalPaneLifecycle({
           })
         ) {
           // Why: tab-move rehome and web-mirror remount unmount a still-live tab; detach preserves the running PTY so the remount reattaches without restarting the shell.
-          transport.detach?.()
+          // preserveExitObserver:false — the session-bound exit observer closes over the disposed pane's xterm
+          // (~14MB/pane pinned in the ptyId-keyed dispatcher maps until exit). Detached exit is owned by the
+          // parked watcher sidecar; without a watcher it buffers and drains into the next mount's registerExit.
+          transport.detach?.({ preserveExitObserver: false })
         } else {
           // Why: un-attached transports have no PTY ID; destroy so an in-flight spawn resolves to a killed PTY, not a revived stale binding after unmount.
           transport.destroy?.()
         }
+      }
+      if (!tabStillExists) {
+        // Covers a pane whose transport was removed before this cleanup (for
+        // example, a close raced the effect teardown).
+        discardDeferredSplitPaneHandoffsForTab(tabId)
       }
       for (const panePtyBinding of panePtyBindings.values()) {
         panePtyBinding.dispose()

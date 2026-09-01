@@ -18,12 +18,19 @@ export function mockBrowserManager(
 ): BrowserManager {
   return {
     getWebContentsIdByTabId: () => tabs,
+    getTabIdForWebContentsId: (webContentsId: number) => {
+      for (const [tabId, tabWebContentsId] of tabs) {
+        if (tabWebContentsId === webContentsId) {
+          return tabId
+        }
+      }
+      return null
+    },
     getWorktreeIdForTab: (tabId: string) => worktrees.get(tabId),
     getGuestWebContentsId: vi.fn(() => null),
     getBrowserPageLoadError: vi.fn(() => null),
     getBrowserPageCertificateFailure: vi.fn(() => null),
     unregisterGuest: vi.fn(),
-    ensureWebviewVisible: vi.fn(async () => () => {}),
     acquireAutomationVisibility: vi.fn(async () => () => {}),
     ...overrides
   } as unknown as BrowserManager
@@ -50,6 +57,7 @@ export type MockWebContents = {
   removeListener: Mock<(event: string, listener: MockEmitterListener) => void>
   isDestroyed: () => boolean
   invalidate: Mock<() => void>
+  capturePage: Mock<() => Promise<unknown>>
   focus: Mock<() => void>
   debugger: MockWebContentsDebugger
 }
@@ -72,6 +80,13 @@ export function mockWebContents(
     removeListener: vi.fn(),
     isDestroyed: () => false,
     invalidate: vi.fn(),
+    capturePage: vi.fn(async () => ({
+      isEmpty: () => false,
+      getSize: () => ({ width: 800, height: 600 }),
+      crop: vi.fn(),
+      toPNG: () => Buffer.from('native-screenshot'),
+      toJPEG: () => Buffer.from('native-screenshot')
+    })),
     focus: vi.fn(),
     debugger: {
       isAttached: vi.fn(() => true),

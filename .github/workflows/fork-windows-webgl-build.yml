@@ -1,0 +1,135 @@
+name: Fork Windows WebGL Fix Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - cursor/sync-upstream-webglfix-a10a
+      - fix/webgl-screenshot-recovery
+
+permissions:
+  contents: write
+
+jobs:
+  test-and-package:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+      ORCA_LOCAL_BUILD_VERSION: 1.4.194-webglfix.1
+      RELEASE_TAG: v1.4.194-webglfix.1
+      RELEASE_NAME: Orca 1.4.194 WebGL Fix 1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+          cache: pnpm
+
+      - name: Cache electron-builder downloads
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~\AppData\Local\electron\Cache
+            ~\AppData\Local\electron-builder\Cache
+          key: electron-builder-win-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            electron-builder-win-
+
+      - name: Install dependencies
+        uses: nick-fields/retry@v4
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: pnpm install --frozen-lockfile
+
+      - name: Test browser automation recovery
+        run: >-
+          pnpm exec vitest run --config config/vitest.config.ts
+          src/main/browser/cdp-screenshot.test.ts
+          src/main/browser/agent-browser-bridge-automation-visibility.test.ts
+          src/main/browser/agent-browser-bridge-command-transport.test.ts
+          src/main/browser/agent-browser-bridge-session-lifecycle.test.ts
+          src/main/browser/browser-telemetry-capture.test.ts
+          src/main/browser/browser-manager-guest-visibility.test.ts
+          src/main/browser/agent-browser-windows-pipe-release.test.ts
+
+      - name: Typecheck main process
+        run: pnpm typecheck:node
+
+      - name: Build app
+        run: pnpm build:release
+
+      - name: Package unsigned Windows app
+        shell: pwsh
+        run: |
+          node config/scripts/ensure-native-runtime.mjs --runtime=electron
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm exec electron-builder --config config/electron-builder.config.cjs --win --publish never
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path 'dist/win-unpacked/Orca.exe')) {
+            throw 'Missing dist/win-unpacked/Orca.exe'
+          }
+          if (-not (Test-Path 'dist/orca-windows-setup.exe')) {
+            throw 'Missing dist/orca-windows-setup.exe'
+          }
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v7
+        with:
+          name: orca-windows-webgl-fix-${{ github.run_number }}
+          path: |
+            dist/orca-windows-setup.exe
+            dist/win-unpacked/**
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Publish GitHub pre-release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $installer = 'dist/orca-windows-setup.exe'
+          $hash = (Get-FileHash -Algorithm SHA256 $installer).Hash
+          $notes = @"
+          这是基于官方 Orca 最新 main（含 v1.4.194 及之后提交）的 Windows x64 预发行修复包，保留本 fork 的 WebGL / Windows 浏览器自动化修复。
+
+          相对官方最新：
+          - 视口截图优先使用 Electron 原生捕获，避开 WebGL 页面上的 CDP 合成器死锁。
+          - 后台标签截图复用生产环境自动化可见性租约，不切走用户当前终端。
+          - 截图不再走 agent-browser 文件中转，避免超时后污染后续会话。
+          - 失效自动化会话重建，并换用唯一 helper session 名。
+          - 修复 Windows 上 agent-browser 守护进程继承 stdout/stderr 导致冷启动命令不 close 的问题。
+          - 为 browser.* RPC 增加 keepalive，且不占用长轮询额度。
+          - 同时保留官方 #15887 的 windowsHide 和 #16588 的 daemon 空闲超时。
+
+          Commit: ${{ github.sha }}
+          CI: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          Installer SHA-256: $hash
+
+          这是未签名的 Windows x64 预发行包，SmartScreen 可能提示未知发布者。安装器沿用官方 appId=com.stablyai.orca，可覆盖升级当前每用户安装并保留用户数据。
+          "@
+          $notesPath = 'dist/release-notes.md'
+          Set-Content -Path $notesPath -Value $notes -Encoding utf8
+
+          gh release view $env:RELEASE_TAG --repo ${{ github.repository }} 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:RELEASE_TAG $installer --repo ${{ github.repository }} --clobber
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            gh release edit $env:RELEASE_TAG --repo ${{ github.repository }} --notes-file $notesPath --title $env:RELEASE_NAME --prerelease
+          } else {
+            gh release create $env:RELEASE_TAG $installer --repo ${{ github.repository }} --title $env:RELEASE_NAME --prerelease --notes-file $notesPath --target ${{ github.ref_name }}
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

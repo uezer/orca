@@ -49,6 +49,22 @@ describe('startup ordering', () => {
     )
   })
 
+  it('resolves the browser hosting identity with nothing awaited before it', () => {
+    const source = readFileSync(join(process.cwd(), 'src/main/index.ts'), 'utf8')
+    const readyIndex = source.indexOf('app.whenReady().then(')
+    const initIndex = source.indexOf('initializeBrowserClientHostId(')
+
+    expect(readyIndex).toBeGreaterThanOrEqual(0)
+    expect(initIndex).toBeGreaterThan(readyIndex)
+    // Why nothing may be awaited first: the identity is stamped into the renderer's argv when the
+    // window is created, and a suspension here lets a window be created against a process-local
+    // stand-in that the durable id then contradicts. The constraint is positional, so only a source
+    // census can hold it — no behavioural test distinguishes "resolved" from "resolved in time".
+    expect(source.slice(readyIndex, initIndex)).not.toMatch(/\bawait\b/)
+    // Why the count: a second call site would leave the ordering claim above ambiguous.
+    expect(source.split('initializeBrowserClientHostId(')).toHaveLength(2)
+  })
+
   it('requires daemon authority before restored-subagent liveness runs', () => {
     const source = readFileSync(join(process.cwd(), 'src/main/index.ts'), 'utf8')
     const sweepStart = source.indexOf('function reapRestoredSubagentsWithoutLiveAgent()')
@@ -105,6 +121,7 @@ describe('startup ordering', () => {
     expect(desktopStartup).toContain(
       'openWindow: () => openMainWindow({ revealOnDidFinishLoad: true })'
     )
+    expect(desktopStartup).toContain('bindServices: bindTerminalRuntimeStartupServices')
     expect(desktopStartup).toContain('shellPathReady,')
     expect(desktopStartup).toContain('startServices: startTerminalRuntimeStartupServices')
     expect(barrier).toContain('managedWslCliStartupBarrierReady')
@@ -254,6 +271,54 @@ describe('startup ordering', () => {
     expect(disposeIndex).toBeGreaterThan(commitIndex)
   })
 
+  it('joins structured agent sessions to the committed quit barrier', () => {
+    const source = readFileSync(join(process.cwd(), 'src/main/index.ts'), 'utf8')
+    const willQuitStart = source.indexOf("app.on('will-quit'")
+    const willQuitEnd = source.indexOf("app.on('window-all-closed'", willQuitStart)
+    const willQuit = source.slice(willQuitStart, willQuitEnd)
+
+    expect(willQuit).toContain(
+      'const structuredAgentSessionShutdown = stopStructuredAgentSessionRuntime()'
+    )
+    expect(willQuit).toContain(
+      "{ name: 'structured-agent-session', promise: structuredAgentSessionShutdown }"
+    )
+  })
+
+  it('joins agent-browser cleanup before the committed quit exits', () => {
+    const source = readFileSync(join(process.cwd(), 'src/main/index.ts'), 'utf8')
+    const willQuitStart = source.indexOf("app.on('will-quit'")
+    const windowAllClosedStart = source.indexOf("app.on('window-all-closed'", willQuitStart)
+    const willQuit = source.slice(willQuitStart, windowAllClosedStart)
+    const cleanupStart = willQuit.indexOf('const browserShutdown')
+    const offscreenCleanupStart = willQuit.indexOf(
+      'runtime?.getOffscreenBrowserBackend()?.destroyAll?.()'
+    )
+    const residualCleanupStart = willQuit.indexOf(
+      'runtime?.getAgentBrowserBridge()?.destroyAllSessions()'
+    )
+    const barrierStart = willQuit.indexOf('settleTeardownWithinDeadline([')
+
+    expect(willQuitStart).toBeGreaterThanOrEqual(0)
+    expect(windowAllClosedStart).toBeGreaterThan(willQuitStart)
+    expect(cleanupStart).toBeGreaterThanOrEqual(0)
+    expect(offscreenCleanupStart).toBeGreaterThan(cleanupStart)
+    expect(residualCleanupStart).toBeGreaterThan(offscreenCleanupStart)
+    expect(barrierStart).toBeGreaterThan(cleanupStart)
+    expect(willQuit.slice(barrierStart)).toContain("{ name: 'browser', promise: browserShutdown }")
+  })
+
+  it('registers repeatable serve signal handling before headless startup completes', () => {
+    const source = readFileSync(join(process.cwd(), 'src/main/index.ts'), 'utf8')
+    const serveStart = source.indexOf('if (serveOptions) {')
+    const signalHandlers = source.indexOf('registerServeSignalHandlers(process', serveStart)
+    const serveReady = source.indexOf('await printServeReady(serveOptions)', serveStart)
+
+    expect(serveStart).toBeGreaterThanOrEqual(0)
+    expect(signalHandlers).toBeGreaterThan(serveStart)
+    expect(signalHandlers).toBeLessThan(serveReady)
+  })
+
   it('starts the automation scheduler before headless serve reports ready', () => {
     const source = readFileSync(join(process.cwd(), 'src/main/index.ts'), 'utf8')
     const serveStart = source.indexOf('if (serveOptions) {')
@@ -273,5 +338,38 @@ describe('startup ordering', () => {
     expect(automationStart).toBeLessThan(serveReturn)
     expect(desktopSetWebContents).toBeGreaterThanOrEqual(0)
     expect(desktopAutomationStart).toBeGreaterThan(desktopSetWebContents)
+  })
+
+  it('installs the serve supervisor disconnect quit after the app environment and data path', () => {
+    // Why (#16761): the call resolves the handoff path through getCanonicalUserDataPath(). At module
+    // scope that accessor throws by design, so every `orca serve` process on macOS died at startup
+    // before it could listen. serve-update-handoff.test.ts mocks the resolver, so only ordering
+    // catches this; serve-update-handoff.app-environment.test.ts pins the throw it depends on.
+    const source = readFileSync(join(process.cwd(), 'src/main/index.ts'), 'utf8')
+    const install = 'installServeSupervisorDisconnectQuit(isServeMode)'
+    const appEnvironmentIndex = source.indexOf('setAppEnvironment(new ElectronAppEnvironment())')
+    const dataPathIndex = source.indexOf('initDataPath()')
+    const installIndex = source.indexOf(install)
+
+    expect(source.split(install).length - 1, `${install} should appear exactly once`).toBe(1)
+    expect(appEnvironmentIndex).toBeGreaterThanOrEqual(0)
+    expect(dataPathIndex).toBeGreaterThan(appEnvironmentIndex)
+    expect(installIndex).toBeGreaterThan(dataPathIndex)
+
+    // Why also pin it synchronous: 'disconnect' cannot be delivered while this module is still
+    // evaluating, which is the whole reason deferring it is free. Parked behind an await — say
+    // inside app.whenReady() — the ordering above still holds but a parent that dies in the gap
+    // leaves the serve process orphaned on its port, which is the failure this handler prevents.
+    expect(installIndex).toBeLessThan(source.indexOf('void app.whenReady().then('))
+    expect(installIndex).toBeGreaterThan(source.indexOf('if (hasSingleInstanceLock) {'))
+    // Why only statements at block indentation: the span now covers unrelated helper functions,
+    // and an `await` inside one of those bodies is not what this guards against — the risk is this
+    // call itself being parked behind one.
+    const blockStatements = source
+      .slice(source.indexOf('if (hasSingleInstanceLock) {'), installIndex)
+      .split('\n')
+      .filter((line) => /^ {2}\S/.test(line) && !line.trim().startsWith('//'))
+      .join('\n')
+    expect(blockStatements).not.toContain('await')
   })
 })
