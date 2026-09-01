@@ -9,9 +9,6 @@ on:
 
 permissions:
   contents: write
-  # Why: creating a release that targets a SHA which touches .github/workflows
-  # requires workflows:write; contents:write alone returns 403.
-  workflows: write
 
 jobs:
   test-and-package:
@@ -19,7 +16,6 @@ jobs:
     timeout-minutes: 90
     permissions:
       contents: write
-      workflows: write
     env:
       NODE_OPTIONS: --max-old-space-size=4096
       ORCA_LOCAL_BUILD_VERSION: 1.4.194-webglfix.1
