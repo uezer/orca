@@ -9,11 +9,17 @@ on:
 
 permissions:
   contents: write
+  # Why: creating a release that targets a SHA which touches .github/workflows
+  # requires workflows:write; contents:write alone returns 403.
+  workflows: write
 
 jobs:
   test-and-package:
     runs-on: windows-2022
     timeout-minutes: 90
+    permissions:
+      contents: write
+      workflows: write
     env:
       NODE_OPTIONS: --max-old-space-size=4096
       ORCA_LOCAL_BUILD_VERSION: 1.4.194-webglfix.1
@@ -128,6 +134,6 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             gh release edit $env:RELEASE_TAG --repo ${{ github.repository }} --notes-file $notesPath --title $env:RELEASE_NAME --prerelease
           } else {
-            gh release create $env:RELEASE_TAG $installer --repo ${{ github.repository }} --title $env:RELEASE_NAME --prerelease --notes-file $notesPath --target ${{ github.sha }}
+            gh release create $env:RELEASE_TAG $installer --repo ${{ github.repository }} --title $env:RELEASE_NAME --prerelease --notes-file $notesPath --target ${{ github.ref_name }}
           }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
